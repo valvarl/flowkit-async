@@ -8,30 +8,40 @@ from aiokafka import AIOKafkaConsumer
 
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
-from ..core.time import now_dt, now_ms
+from ..core.time import Clock, SystemClock
 from ..core.utils import stable_hash
 from ..outbox.dispatcher import OutboxDispatcher
 from ..protocol.messages import (
     CmdTaskStart, CommandKind, Envelope, EventKind, MsgType, QTaskDiscover, QueryKind,
-    RTaskSnapshot, Role, RunState, EvTaskAccepted, EvHeartbeat, EvBatchOk, EvBatchFailed,
+    Role, RunState, EvTaskAccepted, EvHeartbeat, EvBatchOk, EvBatchFailed,
     EvTaskDone, EvTaskFailed, SigCancel, TaskDoc
 )
-from .adapters import ADAPTERS, AdapterError
+from .adapters import default_adapters, AdapterError
 
 
 class Coordinator:
     """
     Orchestrates DAG execution across workers via Kafka topics.
-    `db` is injected (e.g., Motor client), making the library independent from app code.
+    `db` is injected (e.g., Motor client). `clock` is injectable for tests.
     """
-    def __init__(self, *, db, cfg: Optional[CoordinatorConfig] = None, worker_types: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        *,
+        db,
+        cfg: Optional[CoordinatorConfig] = None,
+        worker_types: Optional[List[str]] = None,
+        clock: Clock | None = None,
+        adapters: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.db = db
         self.cfg = cfg or CoordinatorConfig.load()
         if worker_types:
             self.cfg.worker_types = list(worker_types)
 
+        self.clock: Clock = clock or SystemClock()
         self.bus = KafkaBus(self.cfg)
-        self.outbox = OutboxDispatcher(db=db, bus=self.bus, cfg=self.cfg)
+        self.outbox = OutboxDispatcher(db=db, bus=self.bus, cfg=self.cfg, clock=self.clock)
+        self.adapters = adapters or dict(default_adapters(db=db, clock=self.clock))
 
         self._tasks: set[asyncio.Task] = set()
         self._running = False
@@ -115,7 +125,7 @@ class Coordinator:
                                 "capabilities": payload.get("capabilities"),
                                 "version": payload.get("version"),
                                 "status": "online",
-                                "last_seen": now_dt(),
+                                "last_seen": self.clock.now_dt(),
                                 "capacity": payload.get("capacity", {}),
                             }},
                             upsert=True
@@ -123,12 +133,12 @@ class Coordinator:
                     elif kind == EventKind.WORKER_OFFLINE:
                         await self.db.worker_registry.update_one(
                             {"worker_id": payload["worker_id"]},
-                            {"$set": {"status": "offline", "last_seen": now_dt()}}
+                            {"$set": {"status": "offline", "last_seen": self.clock.now_dt()}}
                         )
                     else:
                         await self.db.worker_registry.update_one(
                             {"worker_id": payload.get("worker_id")},
-                            {"$set": {"last_seen": now_dt()}},
+                            {"$set": {"last_seen": self.clock.now_dt()}},
                             upsert=True
                         )
                 finally:
@@ -166,7 +176,7 @@ class Coordinator:
 
                 try:
                     await self.db.tasks.update_one({"id": env.task_id},
-                        {"$max": {"last_event_recv_ms": now_ms()} , "$currentDate": {"updated_at": True}})
+                        {"$max": {"last_event_recv_ms": self.clock.now_ms()} , "$currentDate": {"updated_at": True}})
                 except Exception:
                     pass
 
@@ -231,9 +241,9 @@ class Coordinator:
             status=RunState.queued,
             params=params,
             graph=graph,
-            status_history=[{"from": None, "to": RunState.queued, "at": now_dt()}],
-            started_at=now_dt().isoformat(),
-            last_event_recv_ms=now_ms(),
+            status_history=[{"from": None, "to": RunState.queued, "at": self.clock.now_dt()}],
+            started_at=self.clock.now_dt().isoformat(),
+            last_event_recv_ms=self.clock.now_ms(),
         ).model_dump(mode="json")
         await self.db.tasks.insert_one(doc)
         return task_id
@@ -243,7 +253,7 @@ class Coordinator:
         try:
             while True:
                 await self._schedule_ready_nodes()
-                await asyncio.sleep(self.cfg.scheduler_tick_ms / 1000.0)
+                await self.clock.sleep_ms(self.cfg.scheduler_tick_ms)
         except asyncio.CancelledError:
             return
 
@@ -261,11 +271,7 @@ class Coordinator:
         from_nodes = args.get("from_nodes") or (node.get("depends_on") or [])
         if not from_nodes:
             return False
-        q = {
-            "task_id": task_doc["id"],
-            "node_id": {"$in": from_nodes},
-            "status": {"$in": ["partial", "complete"]},
-        }
+        q = {"task_id": task_doc["id"], "node_id": {"$in": from_nodes}, "status": {"$in": ["partial", "complete"]}}
         return (await self.db.artifacts.find_one(q)) is not None
 
     async def _node_ready(self, task_doc, node) -> bool:
@@ -274,7 +280,7 @@ class Coordinator:
             return False
         if status == RunState.deferred:
             nra = int(node.get("next_retry_at_ms") or 0)
-            if nra and nra > now_ms():
+            if nra and nra > self.clock.now_ms():
                 return False
 
         io = (node.get("io") or {})
@@ -319,26 +325,26 @@ class Coordinator:
         try:
             await self.db.tasks.update_one({"id": task_doc["id"], "graph.nodes.node_id": node["node_id"]},
                                       {"$set": {"graph.nodes.$.status": RunState.running,
-                                                "graph.nodes.$.started_at": now_dt(),
+                                                "graph.nodes.$.started_at": self.clock.now_dt(),
                                                 "graph.nodes.$.attempt_epoch": int(node.get("attempt_epoch", 0)) + 1}})
             io = node.get("io", {}) or {}
             fn_name = io.get("fn", "noop")
             fn_args = io.get("fn_args", {}) or {}
-            fn = ADAPTERS.get(fn_name)
+            fn = self.adapters.get(fn_name)
             if not fn:
                 raise AdapterError(f"adapter '{fn_name}' not registered")
             if isinstance(fn_args, dict) and "target" in fn_args and isinstance(fn_args["target"], dict):
                 fn_args["target"].setdefault("node_id", node["node_id"])
-            await fn(self.db, task_doc["id"], **fn_args)
+            await fn(task_doc["id"], **fn_args)
             await self.db.tasks.update_one({"id": task_doc["id"], "graph.nodes.node_id": node["node_id"]},
                                       {"$set": {"graph.nodes.$.status": RunState.finished,
-                                                "graph.nodes.$.finished_at": now_dt(),
-                                                "graph.nodes.$.last_event_recv_ms": now_ms()}})
+                                                "graph.nodes.$.finished_at": self.clock.now_dt(),
+                                                "graph.nodes.$.last_event_recv_ms": self.clock.now_ms()}})
         except Exception as e:
             backoff = int(((node.get("retry_policy") or {}).get("backoff_sec") or 300))
             await self.db.tasks.update_one({"id": task_doc["id"], "graph.nodes.node_id": node["node_id"]},
                                       {"$set": {"graph.nodes.$.status": RunState.deferred,
-                                                "graph.nodes.$.next_retry_at_ms": now_ms() + backoff * 1000,
+                                                "graph.nodes.$.next_retry_at_ms": self.clock.now_ms() + backoff * 1000,
                                                 "graph.nodes.$.last_error": str(e)}})
 
     # ---- enqueue helpers
@@ -364,11 +370,9 @@ class Coordinator:
             if cnt > 0:
                 await self.db.tasks.update_one(
                     {"id": task_id, "graph.nodes.node_id": node_id},
-                    {"$set": {
-                        "graph.nodes.$.status": RunState.finished,
-                        "graph.nodes.$.finished_at": now_dt(),
-                        "graph.nodes.$.attempt_epoch": new_epoch
-                    }}
+                    {"$set": {"graph.nodes.$.status": RunState.finished,
+                              "graph.nodes.$.finished_at": self.clock.now_dt(),
+                              "graph.nodes.$.attempt_epoch": new_epoch}}
                 )
                 return
         except Exception:
@@ -382,7 +386,7 @@ class Coordinator:
             node_id=node_id,
             step_type=node["type"],
             attempt_epoch=new_epoch,
-            ts_ms=now_ms(),
+            ts_ms=self.clock.now_ms(),
             payload=QTaskDiscover(query=QueryKind.TASK_DISCOVER, want_epoch=new_epoch).model_dump()
         )
         ev = self.bus.register_reply(discover_env.corr_id)
@@ -406,8 +410,8 @@ class Coordinator:
         if complete:
             await self.db.tasks.update_one({"id": task_id, "graph.nodes.node_id": node_id},
                                     {"$set": {"graph.nodes.$.status": RunState.finished,
-                                                "graph.nodes.$.finished_at": now_dt(),
-                                                "graph.nodes.$.attempt_epoch": new_epoch}})
+                                              "graph.nodes.$.finished_at": self.clock.now_dt(),
+                                              "graph.nodes.$.attempt_epoch": new_epoch}})
             return
 
         try:
@@ -416,15 +420,25 @@ class Coordinator:
             last = int((fresh_node or {}).get("last_event_recv_ms") or 0)
             status = self._to_runstate((fresh_node or {}).get("status"))
             if status not in (RunState.deferred,):
-                if max(0, now_ms() - last) < self.cfg.discovery_window_ms:
+                if max(0, self.clock.now_ms() - last) < self.cfg.discovery_window_ms:
                     return
         except Exception:
             pass
 
-        await self.db.tasks.update_one({"id": task_id, "graph.nodes.node_id": node_id},
-                                  {"$set": {"graph.nodes.$.status": RunState.running,
-                                            "graph.nodes.$.started_at": now_dt(),
-                                            "graph.nodes.$.attempt_epoch": new_epoch}})
+        # CAS: transition node to running only if it's still queued/deferred and attempt_epoch unchanged
+        q = {"id": task_id, "graph.nodes": {"$elemMatch": {
+            "node_id": node_id,
+            "status": {"$in": [RunState.queued, RunState.deferred]},
+            "attempt_epoch": int(node.get("attempt_epoch", 0))
+        }}}
+        upd = {"$set": {"graph.nodes.$.status": RunState.running,
+                        "graph.nodes.$.started_at": self.clock.now_dt(),
+                        "graph.nodes.$.attempt_epoch": new_epoch}}
+        cas_res = await self.db.tasks.find_one_and_update(q, upd)
+        if not cas_res:
+            # someone else advanced it
+            return
+
         cancel_token = str(uuid.uuid4())
         cmd = CmdTaskStart(cmd=CommandKind.TASK_START,
                            input_ref=node.get("io", {}).get("input_ref"),
@@ -439,7 +453,7 @@ class Coordinator:
             node_id=node_id,
             step_type=node["type"],
             attempt_epoch=new_epoch,
-            ts_ms=now_ms(),
+            ts_ms=self.clock.now_ms(),
             payload=cmd.model_dump()
         )
         await self._enqueue_cmd(env)
@@ -457,16 +471,16 @@ class Coordinator:
                     "event_hash": evh,
                     "payload": env.payload,
                     "ts_ms": env.ts_ms,
-                    "recv_ts_ms": now_ms(),
+                    "recv_ts_ms": self.clock.now_ms(),
                     "attempt_epoch": env.attempt_epoch,
-                    "created_at": now_dt(),
+                    "created_at": self.clock.now_dt(),
                     "metrics_applied": False,
                 }},
                 upsert=True,
             )
         except Exception:
             pass
-        await self.db.tasks.update_one({"id": env.task_id}, {"$max": {"last_event_recv_ms": now_ms()}, "$currentDate": {"updated_at": True}})
+        await self.db.tasks.update_one({"id": env.task_id}, {"$max": {"last_event_recv_ms": self.clock.now_ms()}, "$currentDate": {"updated_at": True}})
 
     async def _on_task_accepted(self, env: Envelope) -> None:
         p = EvTaskAccepted.model_validate(env.payload)
@@ -481,7 +495,7 @@ class Coordinator:
             {"$set": {"graph.nodes.$.lease.worker_id": p.worker_id,
                       "graph.nodes.$.lease.lease_id": p.lease_id,
                       "graph.nodes.$.lease.deadline_ts_ms": p.lease_deadline_ts_ms},
-             "$max": {"graph.nodes.$.last_event_recv_ms": now_ms()}})
+             "$max": {"graph.nodes.$.last_event_recv_ms": self.clock.now_ms()}})
 
     async def _maybe_start_children_on_first_batch(self, parent_task: Dict[str, Any], parent_node_id: str) -> None:
         task_id = parent_task["id"]
@@ -530,8 +544,10 @@ class Coordinator:
             meta = dict(p.metrics or {})
             await self.db.artifacts.update_one(
                 {"task_id": env.task_id, "node_id": env.node_id, "batch_uid": batch_uid},
-                {"$setOnInsert": {"task_id": env.task_id, "node_id": env.node_id, "attempt_epoch": env.attempt_epoch, "status": "partial", "created_at": now_dt()},
-                 "$set": {"status": "partial", "meta": meta, "artifacts_ref": p.artifacts_ref, "updated_at": now_dt()}},
+                {"$setOnInsert": {"task_id": env.task_id, "node_id": env.node_id,
+                                  "attempt_epoch": env.attempt_epoch, "status": "partial",
+                                  "created_at": self.clock.now_dt()},
+                 "$set": {"status": "partial", "meta": meta, "artifacts_ref": p.artifacts_ref, "updated_at": self.clock.now_dt()}},
                 upsert=True
             )
 
@@ -539,7 +555,7 @@ class Coordinator:
             doc = {
                 "task_id": env.task_id, "node_id": env.node_id, "batch_uid": batch_uid,
                 "metrics": p.metrics, "attempt_epoch": env.attempt_epoch,
-                "ts_ms": env.ts_ms, "created_at": now_dt()
+                "ts_ms": env.ts_ms, "created_at": self.clock.now_dt()
             }
             try:
                 await self.db.metrics_raw.insert_one(doc)
@@ -559,14 +575,14 @@ class Coordinator:
             await self.db.metrics_raw.insert_one({
                 "task_id": env.task_id, "node_id": env.node_id, "batch_uid": p.batch_uid,
                 "metrics": {}, "failed": True, "reason": p.reason_code,
-                "attempt_epoch": env.attempt_epoch, "ts_ms": env.ts_ms, "created_at": now_dt()
+                "attempt_epoch": env.attempt_epoch, "ts_ms": env.ts_ms, "created_at": self.clock.now_dt()
             })
         except Exception:
             pass
         try:
             await self.db.artifacts.update_one(
                 {"task_id": env.task_id, "node_id": env.node_id, "batch_uid": p.batch_uid},
-                {"$set": {"status": "failed", "error": p.reason_code, "updated_at": now_dt()}},
+                {"$set": {"status": "failed", "error": p.reason_code, "updated_at": self.clock.now_dt()}},
                 upsert=True
             )
         except Exception:
@@ -580,33 +596,33 @@ class Coordinator:
                     "task_id": env.task_id, "node_id": env.node_id,
                     "batch_uid": p.final_uid or "__final__",
                     "metrics": p.metrics, "final": True,
-                    "attempt_epoch": env.attempt_epoch, "ts_ms": env.ts_ms, "created_at": now_dt()
+                    "attempt_epoch": env.attempt_epoch, "ts_ms": env.ts_ms, "created_at": self.clock.now_dt()
                 })
             except Exception:
                 pass
         if p.artifacts_ref:
             await self.db.artifacts.update_one(
                 {"task_id": env.task_id, "node_id": env.node_id},
-                {"$set": {"status": "complete", "meta": p.metrics or {}, "updated_at": now_dt()},
-                 "$setOnInsert": {"task_id": env.task_id, "node_id": env.node_id, "attempt_epoch": env.attempt_epoch, "created_at": now_dt()}},
+                {"$set": {"status": "complete", "meta": p.metrics or {}, "updated_at": self.clock.now_dt()},
+                 "$setOnInsert": {"task_id": env.task_id, "node_id": env.node_id, "attempt_epoch": env.attempt_epoch, "created_at": self.clock.now_dt()}},
                 upsert=True
             )
         await self.db.tasks.update_one({"id": env.task_id, "graph.nodes.node_id": env.node_id},
                                   {"$set": {"graph.nodes.$.status": RunState.finished,
-                                            "graph.nodes.$.finished_at": now_dt()}})
+                                            "graph.nodes.$.finished_at": self.clock.now_dt()}})
 
     async def _on_task_failed(self, env: Envelope) -> None:
         p = EvTaskFailed.model_validate(env.payload)
         if p.permanent:
             await self._cascade_cancel(env.task_id, reason=f"hard_fail:{p.reason_code}")
-            await self.db.tasks.update_one({"id": env.task_id}, {"$set": {"status": RunState.failed, "finished_at": now_dt()}})
+            await self.db.tasks.update_one({"id": env.task_id}, {"$set": {"status": RunState.failed, "finished_at": self.clock.now_dt()}})
         else:
             td = await self.db.tasks.find_one({"id": env.task_id}, {"graph": 1})
             node = self._get_node(td, env.node_id) if td else None
             backoff = int(((node or {}).get("retry_policy") or {}).get("backoff_sec", 300))
             await self.db.tasks.update_one({"id": env.task_id, "graph.nodes.node_id": env.node_id},
                                       {"$set": {"graph.nodes.$.status": RunState.deferred,
-                                                "graph.nodes.$.next_retry_at_ms": now_ms() + backoff * 1000,
+                                                "graph.nodes.$.next_retry_at_ms": self.clock.now_ms() + backoff * 1000,
                                                 "graph.nodes.$.last_error": p.reason_code}})
 
     async def _on_cancelled(self, env: Envelope) -> None:
@@ -621,18 +637,18 @@ class Coordinator:
                                     {"id": 1, "last_event_recv_ms": 1})
                 async for t in cur:
                     last = int(t.get("last_event_recv_ms") or 0)
-                    dt_ms = max(0, now_ms() - last)
+                    dt_ms = max(0, self.clock.now_ms() - last)
                     if dt_ms >= self.cfg.hb_hard_ms:
                         await self.db.tasks.update_one({"id": t["id"]},
-                                                  {"$set": {"status": RunState.failed, "finished_at": now_dt(),
+                                                  {"$set": {"status": RunState.failed, "finished_at": self.clock.now_dt(),
                                                             "coordinator.liveness.state": "dead"}})
                     elif dt_ms >= self.cfg.hb_soft_ms:
                         await self.db.tasks.update_one({"id": t["id"]},
                                                   {"$set": {"status": RunState.deferred,
                                                             "coordinator.liveness.state": "suspected",
-                                                            "coordinator.liveness.suspected_at": now_dt(),
-                                                            "next_retry_at_ms": now_ms() + 60_000}})
-                await asyncio.sleep(self.cfg.hb_monitor_tick_ms / 1000.0)
+                                                            "coordinator.liveness.suspected_at": self.clock.now_dt(),
+                                                            "next_retry_at_ms": self.clock.now_ms() + 60_000}})
+                await self.clock.sleep_ms(self.cfg.hb_monitor_tick_ms)
         except asyncio.CancelledError:
             return
 
@@ -640,7 +656,7 @@ class Coordinator:
         try:
             while True:
                 await self._finalize_nodes_and_tasks()
-                await asyncio.sleep(self.cfg.finalizer_tick_ms / 1000.0)
+                await self.clock.sleep_ms(self.cfg.finalizer_tick_ms)
         except asyncio.CancelledError:
             return
 
@@ -658,7 +674,7 @@ class Coordinator:
                 result = {"nodes": [{"node_id": n["node_id"], "stats": n.get("stats", {})} for n in nodes]}
                 await self.db.tasks.update_one(
                     {"id": t["id"]},
-                    {"$set": {"status": RunState.finished, "finished_at": now_dt(), "result": result}}
+                    {"$set": {"status": RunState.finished, "finished_at": self.clock.now_dt(), "result": result}}
                 )
 
     async def _cascade_cancel(self, task_id: str, *, reason: str) -> None:
@@ -667,7 +683,7 @@ class Coordinator:
                 {"id": task_id},
                 {"$set": {"coordinator.cancelled": True,
                           "coordinator.cancel_reason": reason,
-                          "coordinator.cancelled_at": now_dt()},
+                          "coordinator.cancelled_at": self.clock.now_dt()},
                  "$currentDate": {"updated_at": True}}
             )
         except Exception:
@@ -682,7 +698,7 @@ class Coordinator:
                         {"id": task_id, "graph.nodes.node_id": n["node_id"]},
                         {"$set": {"graph.nodes.$.status": RunState.cancelling,
                                   "graph.nodes.$.coordinator.cancelled": True,
-                                  "graph.nodes.$.cancel_requested_at": now_dt()}}
+                                  "graph.nodes.$.cancel_requested_at": self.clock.now_dt()}}
                     )
                 except Exception:
                     pass
@@ -690,7 +706,8 @@ class Coordinator:
                 lease = n.get("lease") or {}
                 worker_id = lease.get("worker_id")
                 if worker_id:
-                    sig = SigCancel(reason=reason, cancel_token=None, deadline_ts_ms=now_ms() + self.cfg.cancel_grace_ms).model_dump()
+                    sig = {"sig": "CANCEL", "reason": reason, "cancel_token": None,
+                           "deadline_ts_ms": self.clock.now_ms() + self.cfg.cancel_grace_ms}
                     env = Envelope(
                         msg_type=MsgType.event,
                         role=Role.coordinator,
@@ -700,12 +717,12 @@ class Coordinator:
                         node_id=n["node_id"],
                         step_type=n["type"],
                         attempt_epoch=int(n.get("attempt_epoch", 0)),
-                        ts_ms=now_ms(),
+                        ts_ms=self.clock.now_ms(),
                         payload=sig,
                         target_worker_id=worker_id
                     )
                     await self._enqueue_signal(key_worker_id=worker_id, env=env)
-        await asyncio.sleep(self.cfg.cancel_grace_ms / 1000.0)
+        await self.clock.sleep_ms(self.cfg.cancel_grace_ms)
 
     async def _resume_inflight(self) -> None:
         cur = self.db.tasks.find({"status": {"$in": [RunState.running, RunState.deferred, RunState.queued]}},
@@ -722,7 +739,7 @@ class Coordinator:
                 {"id": task_id},
                 {"$set": {"coordinator.cancelled": True,
                           "coordinator.cancel_reason": reason,
-                          "coordinator.cancelled_at": now_dt()}}
+                          "coordinator.cancelled_at": self.clock.now_dt()}}
             )
         except Exception:
             pass
@@ -739,5 +756,6 @@ class Coordinator:
             await self.db.outbox.create_index([("state", 1), ("next_attempt_at_ms", 1)], name="ix_outbox_state_next_ms")
             await self.db.metrics_raw.create_index([("task_id",1), ("node_id",1), ("batch_uid",1)], unique=True, name="uniq_metrics_batch")
             await self.db.metrics_raw.create_index([("created_at",1)], name="ttl_metrics_raw", expireAfterSeconds=14*24*3600)
+            await self.db.worker_events.create_index([("task_id",1), ("node_id",1), ("event_hash",1)], unique=True, name="uniq_worker_event")
         except Exception:
             pass
