@@ -3,7 +3,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from flowkit.protocol.messages import Envelope, EventKind, MsgType, RoleKind
+from flowkit.protocol.messages import Envelope, EventKind, MsgType, Role
 from tests.helpers import (BROKER, AIOKafkaProducerMock, dbg, prime_graph,
                            status_topic, wait_task_finished)
 from tests.helpers.handlers import (build_cancelable_source_handler,
@@ -212,7 +212,7 @@ async def test_status_fencing_ignores_stale_epoch(env_and_imports, inmemory_db, 
         base = int((node_by_id(tdoc, "s").get("stats") or {}).get("count") or 0)
 
         env = Envelope(
-            msg_type=MsgType.event, role=RoleKind.worker,
+            msg_type=MsgType.event, role=Role.worker,
             dedup_id="stale1", task_id=task_id, node_id="s", step_type="source",
             attempt_epoch=0,
             payload={"kind": EventKind.BATCH_OK, "worker_id": "WZ", "metrics": {"count": 999},

@@ -1,16 +1,10 @@
 from typing import Any, Dict, Iterable, Optional
 
+from flowkit.worker.handlers.base import RoleHandler 
+
 from ..util import dbg, stable_hash
 
-
-def _base_role(wu):
-    try:
-        return wu.RoleHandler
-    except Exception:
-        from flowkit.worker.handlers.base import RoleHandler as Base
-        return Base
-
-class IndexerHandler(_base_role):
+class IndexerHandler(RoleHandler):
     role = "indexer"
     async def init(self, cfg): self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
     async def load_input(self, ref, inline): return inline or {}
@@ -78,7 +72,7 @@ class _PullFromArtifactsMixin:
             if not progressed:
                 await asyncio.sleep(poll)
 
-class EnricherHandler(_PullFromArtifactsMixin, _base_role):
+class EnricherHandler(_PullFromArtifactsMixin, RoleHandler):
     role = "enricher"
     async def init(self, cfg): self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
     async def load_input(self, ref, inline): return {"input_inline": inline or {}}
@@ -97,7 +91,7 @@ class EnricherHandler(_PullFromArtifactsMixin, _base_role):
         enriched = [{"sku": (x if isinstance(x, str) else x.get("sku", x)), "enriched": True} for x in items]
         return self.wu.BatchResult(success=True, metrics={"enriched": enriched, "count": len(enriched)})
 
-class OCRHandler(_PullFromArtifactsMixin, _base_role):
+class OCRHandler(_PullFromArtifactsMixin, RoleHandler):
     role = "ocr"
     async def init(self, cfg): self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
     async def load_input(self, ref, inline): return {"input_inline": inline or {}}
@@ -116,7 +110,7 @@ class OCRHandler(_PullFromArtifactsMixin, _base_role):
         ocrd = [{"sku": (it["sku"] if isinstance(it, dict) else it), "ocr_ok": True} for it in items]
         return self.wu.BatchResult(success=True, metrics={"ocr": ocrd, "count": len(ocrd)})
 
-class AnalyzerHandler(_PullFromArtifactsMixin, _base_role):
+class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
     role = "analyzer"
     async def init(self, cfg): self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
     async def load_input(self, ref, inline): return (inline or {})

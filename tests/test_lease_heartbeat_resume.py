@@ -3,7 +3,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from flowkit.protocol.messages import Envelope, EventKind, MsgType, RoleKind
+from flowkit.protocol.messages import Envelope, EventKind, MsgType, Role
 from tests.helpers import (BROKER, dbg, prime_graph, status_topic,
                            wait_task_finished)
 from tests.helpers.handlers import (build_flaky_once_handler,
