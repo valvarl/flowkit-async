@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowkit"
+version = "0.1.0"
+description = "Flow orchestration toolkit: coordinator/worker with Kafka backplane"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Flowkit authors" }]
+
+# Runtime deps (stdlib modules like asyncio/json/... не указываем)
+dependencies = [
+  "aiokafka>=0.8.2",
+  "pydantic>=2.5",
+]
+
+# Optional groups
+[project.optional-dependencies]
+test = [
+  "pytest>=7.4",
+  "pytest-asyncio>=0.23",
+]
+dev = [
+  "ruff>=0.5",
+  "black>=24.4",
+  "mypy>=1.10",
+  "coverage[toml]>=7.5",
+  "pytest>=7.4",
+  "pytest-asyncio>=0.23",
+]
+
+# Если когда-то появится CLI — добавьте здесь консольные скрипты
+# [project.scripts]
+# flowkit = "flowkit.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["flowkit*"]
+
+# Упаковываем конфиги, чтобы они были доступны после установки
+# Путь установки — <prefix>/share/flowkit
+[tool.setuptools.data-files]
+"share/flowkit" = [
+  "configs/coordinator.default.json",
+  "configs/worker.default.json",
+]
+
+# ── Pytest defaults ──────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+markers = [
+  "worker_types(name): override worker types for this test module",
+  "use_handlers(names): restrict which test handlers to instantiate",
+]
+
+# ── Ruff (линтер) ────────────────────────────────────────────
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E","F","I","UP","B"]
+ignore = ["E203"] # совместимость с Black вокруг двоеточий в слайсах
+
+# ── Black (форматтер) ────────────────────────────────────────
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+# ── Coverage (опционально) ───────────────────────────────────
+[tool.coverage.run]
+branch = true
+source = ["flowkit"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
