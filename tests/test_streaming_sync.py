@@ -14,7 +14,15 @@ pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
 @pytest_asyncio.fixture
 async def coord(env_and_imports, inmemory_db):
     cd, _ = env_and_imports
-    c = cd.Coordinator()
+    cfg = cd.CoordinatorConfig.load(overrides={
+        "scheduler_tick_sec": 0.05,
+        "discovery_window_sec": 0.05,
+        "finalizer_tick_sec": 0.05,
+        "hb_monitor_tick_sec": 0.2,
+        "cancel_grace_sec": 0.1,
+        "outbox_dispatch_tick_sec": 0.05,
+    })
+    c = cd.Coordinator(db=inmemory_db, cfg=cfg)
     dbg("COORD.STARTING")
     await c.start()
     dbg("COORD.STARTED")
@@ -26,11 +34,18 @@ async def coord(env_and_imports, inmemory_db):
         dbg("COORD.STOPPED")
 
 @pytest_asyncio.fixture
-async def workers_indexer_analyzer(env_and_imports, handlers):
+async def workers_indexer_analyzer(env_and_imports, handlers, inmemory_db):
     _, wu = env_and_imports
     h = handlers  # from conftest; includes common handlers by default
-    w_idx = wu.Worker(roles=["indexer"],  handlers={"indexer":  h["indexer"]})
-    w_ana = wu.Worker(roles=["analyzer"], handlers={"analyzer": h["analyzer"]})
+    wcfg = wu.WorkerConfig.load(overrides={
+        "hb_interval_sec": 0.2,
+        "lease_ttl_sec": 2,
+        "db_cancel_poll_ms": 50,
+        "pull_poll_ms_default": 50,
+        "pull_empty_backoff_ms_max": 300,
+    })
+    w_idx = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["indexer"],  handlers={"indexer":  h["indexer"]})
+    w_ana = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["analyzer"], handlers={"analyzer": h["analyzer"]})
     for name, w in (("indexer", w_idx), ("analyzer", w_ana)):
         dbg("WORKER.STARTING", role=name)
         await w.start()
@@ -44,13 +59,20 @@ async def workers_indexer_analyzer(env_and_imports, handlers):
             dbg("WORKER.STOPPED", role=name)
 
 @pytest_asyncio.fixture
-async def workers_3indexers_analyzer(env_and_imports, handlers):
+async def workers_3indexers_analyzer(env_and_imports, handlers, inmemory_db):
     _, wu = env_and_imports
     h = handlers
-    w_idx1 = wu.Worker(roles=["indexer"],  handlers={"indexer":  h["indexer"]})
-    w_idx2 = wu.Worker(roles=["indexer"],  handlers={"indexer":  h["indexer"]})
-    w_idx3 = wu.Worker(roles=["indexer"],  handlers={"indexer":  h["indexer"]})
-    w_ana  = wu.Worker(roles=["analyzer"], handlers={"analyzer": h["analyzer"]})
+    wcfg = wu.WorkerConfig.load(overrides={
+        "hb_interval_sec": 0.2,
+        "lease_ttl_sec": 2,
+        "db_cancel_poll_ms": 50,
+        "pull_poll_ms_default": 50,
+        "pull_empty_backoff_ms_max": 300,
+    })
+    w_idx1 = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["indexer"],  handlers={"indexer":  h["indexer"]})
+    w_idx2 = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["indexer"],  handlers={"indexer":  h["indexer"]})
+    w_idx3 = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["indexer"],  handlers={"indexer":  h["indexer"]})
+    w_ana  = wu.Worker(db=inmemory_db, cfg=wcfg, roles=["analyzer"], handlers={"analyzer": h["analyzer"]})
     workers = [("indexer#1", w_idx1), ("indexer#2", w_idx2), ("indexer#3", w_idx3), ("analyzer", w_ana)]
     for name, w in workers:
         dbg("WORKER.STARTING", role=name)

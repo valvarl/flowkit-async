@@ -134,6 +134,8 @@ def make_test_handlers(wu, include: Optional[Iterable[str]] = None) -> Dict[str,
     Returns instantiated handlers for selected roles.
     Example: make_test_handlers(wu, include=["indexer","analyzer"])
     """
+    from types import SimpleNamespace
+
     registry = {
         "indexer": IndexerHandler,
         "enricher": EnricherHandler,
@@ -142,10 +144,25 @@ def make_test_handlers(wu, include: Optional[Iterable[str]] = None) -> Dict[str,
     }
     names = list(include) if include else list(registry.keys())
     out = {}
+    def _shim(wu_module, db_obj):
+        # Мини-обёртка: оставляем доступ к Batch/BatchResult/FinalizeResult,
+        # и добавляем db, чтобы хендлеры могли обращаться к self.wu.db
+        return SimpleNamespace(
+            Batch=getattr(wu_module, "Batch"),
+            BatchResult=getattr(wu_module, "BatchResult"),
+            FinalizeResult=getattr(wu_module, "FinalizeResult"),
+            db=db_obj,
+        )
+
+    # db попадёт из фикстуры conftest.handlers (см. правку ниже)
+    import inspect
+    caller_locals = inspect.currentframe().f_back.f_locals if inspect.currentframe() else {}
+    _db = caller_locals.get("_TESTS_DB")  # проставим его из conftest
+
     for name in names:
         cls = registry[name]
         inst = cls()
-        # attach wu module so handler can access Batch/BatchResult/db
-        inst.wu = wu  # type: ignore[attr-defined]
+        # attach wu shim so handler can access Batch/BatchResult + db
+        inst.wu = _shim(wu, _db)  # type: ignore[attr-defined]
         out[name] = inst
     return out

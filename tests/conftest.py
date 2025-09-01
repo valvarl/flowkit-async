@@ -25,11 +25,10 @@ def env_and_imports(monkeypatch, request):
 
 @pytest.fixture(scope="function")
 def inmemory_db(monkeypatch, env_and_imports):
-    cd, wu = env_and_imports
-    return install_inmemory_db(monkeypatch, cd, wu)
+    return install_inmemory_db()
 
 @pytest.fixture
-def handlers(env_and_imports, request):
+def handlers(env_and_imports, request, inmemory_db):
     """
     Returns a dict of handlers; you can limit via:
     @pytest.mark.use_handlers(["indexer","analyzer"])
@@ -37,7 +36,12 @@ def handlers(env_and_imports, request):
     _, wu = env_and_imports
     m = request.node.get_closest_marker("use_handlers")
     include = m.args[0] if m and m.args else None
-    return make_test_handlers(wu, include=include)
+    globals_for_handlers = globals()
+    globals_for_handlers["_TESTS_DB"] = inmemory_db
+    try:
+        return make_test_handlers(wu, include=include)
+    finally:
+        globals_for_handlers.pop("_TESTS_DB", None)
 
 @pytest.fixture
 def set_constants(monkeypatch, env_and_imports):

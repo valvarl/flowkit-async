@@ -196,10 +196,17 @@ class Worker:
     async def _send_announce(self, kind: EventKind, extra: Dict[str, Any]) -> None:
         assert self._producer is not None
         payload = {"kind": kind, **extra}
+        now_ms = self.clock.now_ms()
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
-            dedup_id=stable_hash({"announce": kind, "worker": self.worker_id, "ts_ms": self.clock.now_ms()}),
-            task_id="*", node_id="*", step_type="*", attempt_epoch=0, payload=payload
+            msg_type=MsgType.event,
+            role=Role.worker,
+            dedup_id=stable_hash({"announce": kind, "worker": self.worker_id, "ts_ms": now_ms}),
+            task_id="*",
+            node_id="*",
+            step_type="*",
+            attempt_epoch=0,
+            ts_ms=now_ms,
+            payload=payload,
         )
         await self._producer.send_and_wait(self.cfg.topic_worker_announce, env.model_dump(mode="json"))
 

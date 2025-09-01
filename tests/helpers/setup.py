@@ -44,6 +44,7 @@ def setup_env_and_imports(monkeypatch, *, worker_types: str = "indexer,enricher,
     Wires in-memory Kafka + installs outbox bypass (optional) and imports coordinator/worker fresh.
     """
     reset_broker()
+    monkeypatch.setenv("WORKER_TYPES", worker_types)
 
     # ensure fresh import
     import sys as _sys
@@ -53,10 +54,11 @@ def setup_env_and_imports(monkeypatch, *, worker_types: str = "indexer,enricher,
 
     from flowkit.coordinator import runner as cd
     from flowkit.worker import runner as wu
+    from flowkit.bus import kafka as bus
 
     # replace aiokafka
-    monkeypatch.setattr(cd, "AIOKafkaProducer", AIOKafkaProducerMock, raising=True)
-    monkeypatch.setattr(cd, "AIOKafkaConsumer", AIOKafkaConsumerMock, raising=True)
+    monkeypatch.setattr(bus, "AIOKafkaProducer", AIOKafkaProducerMock, raising=True)
+    monkeypatch.setattr(bus, "AIOKafkaConsumer", AIOKafkaConsumerMock, raising=True)
     monkeypatch.setattr(wu, "AIOKafkaProducer", AIOKafkaProducerMock, raising=True)
     monkeypatch.setattr(wu, "AIOKafkaConsumer", AIOKafkaConsumerMock, raising=True)
 
@@ -82,19 +84,12 @@ def setup_env_and_imports(monkeypatch, *, worker_types: str = "indexer,enricher,
     dbg("ENV.READY", worker_types=worker_types)
     return cd, wu
 
-def install_inmemory_db(monkeypatch, cd, wu) -> InMemDB:
+def install_inmemory_db() -> InMemDB:
     """
     Installs a shared in-memory DB into coordinator and worker modules (and worker.artifacts if present).
     """
     db = InMemDB()
-    monkeypatch.setattr(cd, "db", db, raising=True)
-    monkeypatch.setattr(wu, "db", db, raising=True)
-    try:
-        from flowkit.worker import artifacts as warts
-        monkeypatch.setattr(warts, "db", db, raising=True)
-    except Exception:
-        pass
-    dbg("DB.INSTALLED")
+    dbg("DB.INSTALLED", mode="injected_at_construction")
     return db
 
 def apply_overrides(monkeypatch, *, cd=None, wu=None, coord_overrides: Optional[Dict[str, Any]] = None, worker_overrides: Optional[Dict[str, Any]] = None):
