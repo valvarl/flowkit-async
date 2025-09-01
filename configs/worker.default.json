@@ -1,0 +1,28 @@
+{
+  "kafka_bootstrap": "kafka:9092",
+
+  "topic_cmd_fmt": "cmd.{type}.v1",
+  "topic_status_fmt": "status.{type}.v1",
+  "topic_worker_announce": "workers.announce.v1",
+  "topic_query": "query.tasks.v1",
+  "topic_reply": "reply.tasks.v1",
+  "topic_signals": "signals.v1",
+
+  "roles": ["echo"],
+  "worker_id": null,
+  "worker_version": "2.0.0",
+
+  "lease_ttl_sec": 60,
+  "hb_interval_sec": 20,
+  "announce_interval_sec": 60,
+
+  "dedup_cache_size": 10000,
+  "dedup_ttl_ms": 3600000,
+
+  "pull_poll_ms_default": 300,
+  "pull_empty_backoff_ms_max": 4000,
+
+  "db_cancel_poll_ms": 500,
+
+  "state_dir": "./.worker_state"
+}

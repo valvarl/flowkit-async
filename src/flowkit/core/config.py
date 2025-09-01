@@ -94,3 +94,69 @@ class CoordinatorConfig:
         cfg = cls(**data)
         cfg._derive_ms()
         return cfg
+    
+
+@dataclass
+class WorkerConfig:
+    # Kafka
+    kafka_bootstrap: str = "kafka:9092"
+
+    # Topic names/formats
+    topic_cmd_fmt: str = "cmd.{type}.v1"
+    topic_status_fmt: str = "status.{type}.v1"
+    topic_worker_announce: str = "workers.announce.v1"
+    topic_query: str = "query.tasks.v1"
+    topic_reply: str = "reply.tasks.v1"
+    topic_signals: str = "signals.v1"
+
+    # Identity
+    roles: List[str] = field(default_factory=lambda: ["echo"])
+    worker_id: Optional[str] = None  # if None -> will be generated
+    worker_version: str = "2.0.0"
+
+    # Timing (seconds → ms derivations)
+    lease_ttl_sec: int = 60
+    hb_interval_sec: int = 20
+    announce_interval_sec: int = 60
+
+    # Dedup
+    dedup_cache_size: int = 10000
+    dedup_ttl_ms: int = 3600_000
+
+    # Pull adapters
+    pull_poll_ms_default: int = 300
+    pull_empty_backoff_ms_max: int = 4000
+
+    # DB cancel poll
+    db_cancel_poll_ms: int = 500
+
+    # Local state
+    state_dir: str = "./.worker_state"
+
+    # ---- derived (computed in post_init) ----
+    lease_ttl_ms: int = 60_000
+    hb_interval_ms: int = 20_000
+    announce_interval_ms: int = 60_000
+
+    def __post_init__(self) -> None:
+        self.lease_ttl_ms = int(self.lease_ttl_sec * 1000)
+        self.hb_interval_ms = int(self.hb_interval_sec * 1000)
+        self.announce_interval_ms = int(self.announce_interval_sec * 1000)
+
+    # ---- topic helpers
+    def topic_cmd(self, step_type: str) -> str:
+        return self.topic_cmd_fmt.format(type=step_type)
+
+    def topic_status(self, step_type: str) -> str:
+        return self.topic_status_fmt.format(type=step_type)
+
+    # ---- loader
+    @staticmethod
+    def load(path: str = "configs/worker.default.json", overrides: Optional[Dict[str, Any]] = None) -> "WorkerConfig":
+        data: Dict[str, Any] = {}
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        if overrides:
+            data.update(overrides)
+        return WorkerConfig(**data)
