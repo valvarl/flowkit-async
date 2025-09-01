@@ -1,0 +1,25 @@
+{
+  "kafka_bootstrap": "kafka:9092",
+  "worker_types": ["indexer", "enricher", "grouper", "analyzer"],
+
+  "topic_cmd_fmt": "cmd.{type}.v1",
+  "topic_status_fmt": "status.{type}.v1",
+  "topic_worker_announce": "workers.announce.v1",
+  "topic_query": "query.tasks.v1",
+  "topic_reply": "reply.tasks.v1",
+  "topic_signals": "signals.v1",
+
+  "heartbeat_soft_sec": 300,
+  "heartbeat_hard_sec": 3600,
+  "lease_ttl_sec": 45,
+  "discovery_window_sec": 8,
+  "cancel_grace_sec": 30,
+  "scheduler_tick_sec": 1.0,
+  "finalizer_tick_sec": 5.0,
+  "hb_monitor_tick_sec": 10.0,
+  "outbox_dispatch_tick_sec": 0.25,
+
+  "outbox_max_retry": 12,
+  "outbox_backoff_min_ms": 250,
+  "outbox_backoff_max_ms": 60000
+}
