@@ -36,12 +36,10 @@ def handlers(env_and_imports, request, inmemory_db):
     _, wu = env_and_imports
     m = request.node.get_closest_marker("use_handlers")
     include = m.args[0] if m and m.args else None
-    globals_for_handlers = globals()
-    globals_for_handlers["_TESTS_DB"] = inmemory_db
-    try:
-        return make_test_handlers(wu, include=include)
-    finally:
-        globals_for_handlers.pop("_TESTS_DB", None)
+
+    # make_test_handlers inspects caller locals for `_TESTS_DB`
+    _TESTS_DB = inmemory_db  # noqa: F841 - accessed via inspect in helper
+    return make_test_handlers(wu, include=include)
 
 @pytest.fixture
 def set_constants(monkeypatch, env_and_imports):
