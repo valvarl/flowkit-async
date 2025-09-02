@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import uuid
@@ -47,7 +48,7 @@ class Worker:
         handlers: Optional[Dict[str, RoleHandler]] = None,
     ) -> None:
         self.db = db
-        self.cfg = (cfg or WorkerConfig.load())
+        self.cfg = copy.deepcopy(cfg) if cfg is not None else WorkerConfig.load()
         if roles:
             self.cfg.roles = list(roles)
         self.clock: Clock = clock or SystemClock()

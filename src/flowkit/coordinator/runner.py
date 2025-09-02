@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -34,7 +35,7 @@ class Coordinator:
         adapters: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.db = db
-        self.cfg = cfg or CoordinatorConfig.load()
+        self.cfg = copy.deepcopy(cfg) if cfg is not None else CoordinatorConfig.load()
         if worker_types:
             self.cfg.worker_types = list(worker_types)
 

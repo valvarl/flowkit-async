@@ -63,7 +63,7 @@ class KafkaBus:
     # ---- raw send (used by OutboxDispatcher)
     async def _raw_send(self, topic: str, key: bytes, env: Envelope) -> None:
         assert self._producer is not None
-        await self._producer.send_and_wait(topic, dumps(env.model_dump(mode="json")), key=key)
+        await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)
 
     # ---- replies
     def register_reply(self, corr_id: str) -> asyncio.Event:

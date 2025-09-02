@@ -2,6 +2,8 @@ import asyncio
 import time
 from typing import Any, Dict
 
+from flowkit.protocol.messages import RunState
+
 from .util import dbg
 
 
@@ -29,7 +31,7 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> Dict[st
             else:
                 dbg("WAIT.PROGRESS", info="task_not_found_yet")
             last_log = now
-        if t and str(t.get("status")) == "finished":
+        if t and t.get("status") == RunState.finished:
             dbg("WAIT.DONE")
             return t
         await asyncio.sleep(0.05)
