@@ -7,6 +7,7 @@ from .util import dbg
 
 def _now_dt(): return datetime.now(timezone.utc)
 
+
 class InMemCollection:
     def __init__(self, name: str):
         self.name = name
@@ -18,7 +19,8 @@ class InMemCollection:
         for p in path.split("."):
             if isinstance(cur, list) and p.isdigit():
                 idx = int(p)
-                if idx >= len(cur): return None
+                if idx >= len(cur):
+                    return None
                 cur = cur[idx]
             elif isinstance(cur, dict):
                 cur = cur.get(p)
@@ -30,9 +32,11 @@ class InMemCollection:
 
     def _match(self, doc, flt):
         from enum import Enum
+
         def _norm(x): return x.value if isinstance(x, Enum) else x
 
         for k, v in (flt or {}).items():
+            # Специальный разбор $elemMatch для graph.nodes
             if k == "graph.nodes" and isinstance(v, dict) and "$elemMatch" in v:
                 cond = v["$elemMatch"] or {}
                 nodes = (((doc.get("graph") or {}).get("nodes")) or [])
@@ -66,22 +70,33 @@ class InMemCollection:
                 continue
 
             val = self._get_path(doc, k)
-            val = _norm(val)
+            # нормализация Enum/RunState
+            try:
+                from enum import Enum as _E
+                if isinstance(val, _E):
+                    val = val.value
+            except Exception:
+                pass
 
             if isinstance(v, dict):
                 if "$in" in v:
-                    in_list = [_norm(x) for x in v["$in"]]
+                    in_list = [x.value if hasattr(x, "value") else x for x in v["$in"]]
                     if val not in in_list: return False
                 if "$ne" in v:
-                    if val == _norm(v["$ne"]): return False
+                    ref = v["$ne"].value if hasattr(v["$ne"], "value") else v["$ne"]
+                    if val == ref: return False
                 if "$lte" in v:
-                    if not (val is not None and val <= _norm(v["$lte"])): return False
+                    ref = v["$lte"].value if hasattr(v["$lte"], "value") else v["$lte"]
+                    if not (val is not None and val <= ref): return False
                 if "$lt" in v:
-                    if not (val is not None and val < _norm(v["$lt"])): return False
+                    ref = v["$lt"].value if hasattr(v["$lt"], "value") else v["$lt"]
+                    if not (val is not None and val < ref): return False
                 if "$gte" in v:
-                    if not (val is not None and val >= _norm(v["$gte"])): return False
+                    ref = v["$gte"].value if hasattr(v["$gte"], "value") else v["$gte"]
+                    if not (val is not None and val >= ref): return False
                 if "$gt" in v:
-                    if not (val is not None and val > _norm(v["$gt"])): return False
+                    ref = v["$gt"].value if hasattr(v["$gt"], "value") else v["$gt"]
+                    if not (val is not None and val > ref): return False
                 continue
 
             if k == "graph.nodes.node_id":
@@ -90,7 +105,8 @@ class InMemCollection:
                     return False
                 continue
 
-            if _norm(v) != val:
+            ref = v.value if hasattr(v, "value") else v
+            if ref != val:
                 return False
 
         return True
@@ -113,7 +129,8 @@ class InMemCollection:
 
     async def find_one(self, flt, proj=None):
         for d in self.rows:
-            if self._match(d, flt): return d
+            if self._match(d, flt):
+                return d
         return None
 
     async def count_documents(self, flt):
@@ -121,27 +138,39 @@ class InMemCollection:
 
     def find(self, flt, proj=None):
         rows = [d for d in self.rows if self._match(d, flt)]
+
         class _Cur:
             def __init__(self, rows): self._rows = rows
             def sort(self, *_): return self
             def limit(self, n): self._rows = self._rows[:n]; return self
             async def __aiter__(self):
                 for r in list(self._rows): yield r
+
         return _Cur(rows)
 
     async def update_one(self, flt, upd, upsert=False):
+        # --- поиск документа
         doc = None
         for d in self.rows:
-            if self._match(d, flt): doc = d; break
+            if self._match(d, flt):
+                doc = d
+                break
 
         created = False
         if not doc:
-            if not upsert: return
+            if not upsert:
+                return
             doc = {}
             self.rows.append(doc)
             created = True
 
+        # --- определение индекса узла для позиционного $
+        from enum import Enum
+
+        def _norm(x): return x.value if isinstance(x, Enum) else x
+
         node_idx = None
+        # (а) точечный фильтр по node_id
         if "graph.nodes.node_id" in flt:
             target = flt["graph.nodes.node_id"]
             nodes = (((doc.get("graph") or {}).get("nodes")) or [])
@@ -149,96 +178,159 @@ class InMemCollection:
                 if n.get("node_id") == target:
                     node_idx = i
                     break
-
-        def set_path(m, path, val):
-            parts = path.split(".")
-            cur = m
-            for i, p in enumerate(parts):
-                if p == "$": p = str(node_idx)
-                last = i == len(parts) - 1
-                if p.isdigit() and isinstance(cur, list):
-                    idx = int(p)
-                    while len(cur) <= idx: cur.append({})
-                    if last: cur[idx] = val
+        # (б) общий $elemMatch
+        if node_idx is None and "graph.nodes" in flt and isinstance(flt["graph.nodes"], dict) and "$elemMatch" in flt["graph.nodes"]:
+            cond = flt["graph.nodes"]["$elemMatch"] or {}
+            nodes = (((doc.get("graph") or {}).get("nodes")) or [])
+            for i, n in enumerate(nodes):
+                ok = True
+                for ck, cv in cond.items():
+                    val = self._get_path(n, ck)
+                    val = _norm(val)
+                    if isinstance(cv, dict):
+                        if "$in" in cv:
+                            in_list = [_norm(x) for x in cv["$in"]]
+                            if val not in in_list: ok = False; break
+                        if "$ne" in cv:
+                            if val == _norm(cv["$ne"]): ok = False; break
+                        if "$lte" in cv:
+                            if not (val is not None and val <= _norm(cv["$lte"])): ok = False; break
+                        if "$lt" in cv:
+                            if not (val is not None and val < _norm(cv["$lt"])): ok = False; break
+                        if "$gte" in cv:
+                            if not (val is not None and val >= _norm(cv["$gte"])): ok = False; break
+                        if "$gt" in cv:
+                            if not (val is not None and val > _norm(cv["$gt"])): ok = False; break
                     else:
-                        if not isinstance(cur[idx], dict): cur[idx] = {}
+                        if _norm(cv) != val: ok = False; break
+                if ok:
+                    node_idx = i
+                    break
+
+        # --- helpers для построения пути
+        def _resolve_token(tok: str) -> str:
+            return str(node_idx) if tok == "$" else tok
+
+        def _set_path(m: Dict[str, Any], path: str, val: Any):
+            parts = path.split(".")
+            cur: Any = m
+            for i in range(len(parts)):
+                p = _resolve_token(parts[i])
+                last = (i == len(parts) - 1)
+                next_tok = _resolve_token(parts[i + 1]) if i + 1 < len(parts) else None
+                next_is_index = bool(next_tok and next_tok.isdigit())
+
+                if isinstance(cur, list):
+                    # обязателен индекс
+                    if not p.isdigit():
+                        # Создадим 0-й элемент по умолчанию
+                        p = "0"
+                    idx = int(p)
+                    while len(cur) <= idx:
+                        cur.append({} if not next_is_index else [])
+                    if last:
+                        cur[idx] = val
+                    else:
+                        if not isinstance(cur[idx], (dict, list)):
+                            cur[idx] = [] if next_is_index else {}
                         cur = cur[idx]
                 else:
-                    if last: cur[p] = val
+                    # dict
+                    if last:
+                        cur[p] = val
                     else:
                         if p not in cur or not isinstance(cur[p], (dict, list)):
-                            cur[p] = [] if parts[i + 1].isdigit() else {}
+                            cur[p] = [] if next_is_index else {}
                         cur = cur[p]
 
+        def _inc_path(m: Dict[str, Any], path: str, delta: int):
+            parts = path.split(".")
+            cur: Any = m
+            for i in range(len(parts)):
+                p = _resolve_token(parts[i])
+                last = (i == len(parts) - 1)
+                next_tok = _resolve_token(parts[i + 1]) if i + 1 < len(parts) else None
+                next_is_index = bool(next_tok and next_tok.isdigit())
+
+                if isinstance(cur, list):
+                    if not p.isdigit():
+                        p = "0"
+                    idx = int(p)
+                    while len(cur) <= idx:
+                        cur.append({} if not next_is_index else [])
+                    if last:
+                        cur[idx] = int(cur[idx] or 0) + int(delta) if isinstance(cur[idx], (int, float)) else int(delta)
+                    else:
+                        if not isinstance(cur[idx], (dict, list)):
+                            cur[idx] = [] if next_is_index else {}
+                        cur = cur[idx]
+                else:
+                    if last:
+                        cur[p] = int((cur.get(p, 0) or 0)) + int(delta)
+                    else:
+                        if p not in cur or not isinstance(cur[p], (dict, list)):
+                            cur[p] = [] if next_is_index else {}
+                        cur = cur[p]
+
+        def _max_path(m: Dict[str, Any], path: str, val: int):
+            parts = path.split(".")
+            cur: Any = m
+            for i in range(len(parts)):
+                p = _resolve_token(parts[i])
+                last = (i == len(parts) - 1)
+                next_tok = _resolve_token(parts[i + 1]) if i + 1 < len(parts) else None
+                next_is_index = bool(next_tok and next_tok.isdigit())
+
+                if isinstance(cur, list):
+                    if not p.isdigit():
+                        p = "0"
+                    idx = int(p)
+                    while len(cur) <= idx:
+                        cur.append({} if not next_is_index else [])
+                    if last:
+                        existing = cur[idx]
+                        cur[idx] = max(int(existing or 0), int(val)) if isinstance(existing, (int, float)) else int(val)
+                    else:
+                        if not isinstance(cur[idx], (dict, list)):
+                            cur[idx] = [] if next_is_index else {}
+                        cur = cur[idx]
+                else:
+                    if last:
+                        existing = cur.get(p)
+                        cur[p] = max(int(existing or 0), int(val)) if isinstance(existing, (int, float)) else int(val)
+                    else:
+                        if p not in cur or not isinstance(cur[p], (dict, list)):
+                            cur[p] = [] if next_is_index else {}
+                        cur = cur[p]
+
+        # --- операции
         if "$setOnInsert" in upd and created:
             for k, v in upd["$setOnInsert"].items():
-                set_path(doc, k, v)
+                _set_path(doc, k, v)
             if self.name == "artifacts" and "status" in upd["$setOnInsert"]:
                 dbg("DB.ARTIFACTS.STATUS", filter=flt, new_status=str(upd["$setOnInsert"]["status"]))
 
         if "$set" in upd:
             if self.name == "tasks":
                 for k, v in upd["$set"].items():
-                    if k.endswith("graph.nodes.$.status"):
+                    if k == "graph.nodes.$.status":
                         dbg("DB.TASK.STATUS", filter=flt, new_status=str(v))
             if self.name == "artifacts" and "status" in upd["$set"]:
                 dbg("DB.ARTIFACTS.STATUS", filter=flt, new_status=str(upd["$set"]["status"]))
             for k, v in upd["$set"].items():
-                set_path(doc, k, v)
+                _set_path(doc, k, v)
 
         if "$inc" in upd:
             for k, v in upd["$inc"].items():
-                parts = k.split(".")
-                cur = doc
-                for i, p in enumerate(parts):
-                    if p == "$": p = str(node_idx)
-                    last = (i == len(parts) - 1)
-
-                    if isinstance(cur, list) and p.isdigit():
-                        idx = int(p)
-                        while len(cur) <= idx: cur.append({})
-                        if last:
-                            cur[idx] = int((cur[idx] or 0)) + int(v) if isinstance(cur[idx], (int, float)) else int(v)
-                        else:
-                            if not isinstance(cur[idx], (dict, list)):
-                                cur[idx] = [] if (i + 1 < len(parts) and parts[i + 1].isdigit()) else {}
-                            cur = cur[idx]
-                    else:
-                        if last:
-                            cur[p] = int((cur.get(p, 0) or 0)) + int(v)
-                        else:
-                            if p not in cur or not isinstance(cur[p], (dict, list)):
-                                cur[p] = [] if (i + 1 < len(parts) and parts[i + 1].isdigit()) else {}
-                            cur = cur[p]
+                _inc_path(doc, k, v)
 
         if "$max" in upd:
             for k, v in upd["$max"].items():
-                parts = k.split(".")
-                cur = doc
-                for i, p in enumerate(parts):
-                    if p == "$": p = str(node_idx)
-                    last = (i == len(parts) - 1)
-
-                    if isinstance(cur, list) and p.isdigit():
-                        idx = int(p)
-                        while len(cur) <= idx: cur.append({})
-                        if last:
-                            cur[idx] = max(int(cur[idx] or 0), int(v)) if isinstance(cur[idx], (int, float)) else int(v)
-                        else:
-                            if not isinstance(cur[idx], (dict, list)):
-                                cur[idx] = [] if (i + 1 < len(parts) and parts[i + 1].isdigit()) else {}
-                            cur = cur[idx]
-                    else:
-                        if last:
-                            cur[p] = max(int((cur.get(p) or 0)), int(v))
-                        else:
-                            if p not in cur or not isinstance(cur[p], (dict, list)):
-                                cur[p] = [] if (i + 1 < len(parts) and parts[i + 1].isdigit()) else {}
-                            cur = cur[p]
+                _max_path(doc, k, v)
 
         if "$currentDate" in upd:
             for k, _ in upd["$currentDate"].items():
-                set_path(doc, k, _now_dt())
+                _set_path(doc, k, _now_dt())
 
     async def find_one_and_update(self, flt, upd):
         doc = await self.find_one(flt)
@@ -246,6 +338,7 @@ class InMemCollection:
         return doc
 
     async def create_index(self, *a, **k): return "ok"
+
 
 class InMemDB:
     """
@@ -263,5 +356,4 @@ class InMemDB:
         return self.collection(name)
 
     async def create_index(self, collection: str, *args, **kwargs):
-        # Forward to collection-level create_index
         return await self.collection(collection).create_index(*args, **kwargs)
