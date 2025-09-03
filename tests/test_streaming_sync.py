@@ -17,13 +17,7 @@ from typing import Any, Dict, Optional
 import pytest
 import pytest_asyncio
 
-from tests.helpers import (
-    BROKER,
-    AIOKafkaProducerMock,
-    dbg,
-    prime_graph,
-    wait_task_finished,
-)
+from tests.helpers import BROKER, AIOKafkaProducerMock, dbg, prime_graph, wait_task_finished
 
 # Limit worker types for this module (see conftest._worker_types_from_marker).
 pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
@@ -54,7 +48,7 @@ async def coord(env_and_imports, inmemory_db, coord_cfg):
 async def workers_indexer_analyzer(env_and_imports, handlers, inmemory_db, worker_cfg):
     """
     Start a minimal worker set: one 'indexer' upstream and one 'analyzer' downstream.
-    Handlers come from `conftest.handlers` (tests.helpers.handlers.*).
+    Handlers come from `conftest.handlers`.
     """
     _, wu = env_and_imports
     w_idx = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["indexer"], handlers={"indexer": handlers["indexer"]})
@@ -452,7 +446,6 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
     """
     Two back-to-back tasks must keep metric aggregation isolated per task document.
     """
-
     cd, _ = env_and_imports
 
     async def run_once(total: int, batch: int):

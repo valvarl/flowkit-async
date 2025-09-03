@@ -59,7 +59,7 @@ def env_and_imports(monkeypatch, request):
     return cd, wu
 
 @pytest.fixture(scope="function")
-def inmemory_db(monkeypatch, env_and_imports):
+def inmemory_db(env_and_imports):
     return install_inmemory_db()
 
 @pytest.fixture
@@ -72,7 +72,4 @@ def handlers(env_and_imports, request, inmemory_db):
     m = request.node.get_closest_marker("use_handlers")
     include = m.args[0] if m and m.args else None
 
-    # make_test_handlers inspects caller locals for `_TESTS_DB`
-    _TESTS_DB = inmemory_db  # noqa: F841 - accessed via inspect in helper
     return make_test_handlers(wu, inmemory_db, include=include)
-
