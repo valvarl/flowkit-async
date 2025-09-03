@@ -20,83 +20,22 @@ import pytest
 import pytest_asyncio
 
 from tests.helpers import BROKER, AIOKafkaProducerMock, dbg
-from tests.helpers.handlers import build_indexer_handler, build_analyzer_handler
-from tests.helpers.graph import prime_graph, wait_task_finished, node_by_id, make_graph
+from tests.helpers.graph import (make_graph, node_by_id, prime_graph,
+                                 wait_node_not_running_for, wait_node_running,
+                                 wait_task_finished)
+from tests.helpers.handlers import (build_analyzer_handler,
+                                    build_indexer_handler)
 
 # Limit worker types for this module (see conftest._worker_types_from_marker).
 pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
 
 
-# ───────────────────────── Fixtures ─────────────────────────
-
-
-@pytest_asyncio.fixture
-async def coord(env_and_imports, inmemory_db, coord_cfg):
-    """
-    Start a Coordinator with a fast-ticking test config and in-memory DB.
-    """
-    cd, _ = env_and_imports
-    c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
-    dbg("COORD.STARTING")
-    await c.start()
-    dbg("COORD.STARTED")
-    try:
-        yield c
-    finally:
-        dbg("COORD.STOPPING")
-        await c.stop()
-        dbg("COORD.STOPPED")
-
-
 # ───────────────────────── Small helpers ─────────────────────────
-
-
-async def _get_task(db, task_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch task document by id from the in-memory DB."""
-    return await db.tasks.find_one({"id": task_id})
-
 
 def _node_status(doc: Dict[str, Any], node_id: str) -> Any:
     """Get node status by node_id from a task doc."""
     n = node_by_id(doc, node_id)
     return n.get("status") if n else None
-
-
-async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 5.0) -> Dict[str, Any]:
-    """
-    Wait until a specific node transitions to a 'running' status.
-    Raises AssertionError on timeout.
-    """
-    from time import time
-
-    t0 = time()
-    while time() - t0 < timeout:
-        doc = await _get_task(db, task_id)
-        if doc:
-            st = _node_status(doc, node_id)
-            if str(st).endswith("running"):
-                return doc
-        await asyncio.sleep(0.02)
-    raise AssertionError(f"node {node_id} not running in time")
-
-
-async def wait_node_not_running_for(db, task_id: str, node_id: str, hold: float = 0.6) -> None:
-    """
-    Ensure that a node does NOT enter 'running' within a small hold window.
-    Useful for negative checks when downstream must wait for upstream completion.
-    """
-    from time import time
-
-    t0 = time()
-    seen_running = False
-    while time() - t0 < hold:
-        doc = await _get_task(db, task_id)
-        st = _node_status(doc or {}, node_id)
-        if str(st).endswith("running"):
-            seen_running = True
-            break
-        await asyncio.sleep(0.03)
-    assert not seen_running, f"{node_id} unexpectedly started during hold window"
 
 
 def _make_indexer(node_id: str, total: int, batch: int) -> Dict[str, Any]:

@@ -25,23 +25,6 @@ pytestmark = pytest.mark.worker_types("indexer,analyzer")
 
 # ───────────────────────── Fixtures ─────────────────────────
 
-@pytest_asyncio.fixture
-async def coord(env_and_imports, inmemory_db, coord_cfg):
-    """
-    Coordinator bound to the in-memory DB with fast defaults (see conftest.py).
-    """
-    cd, _ = env_and_imports
-    c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
-    dbg("COORD.STARTING")
-    await c.start()
-    dbg("COORD.STARTED")
-    try:
-        yield c
-    finally:
-        dbg("COORD.STOPPING")
-        await c.stop()
-        dbg("COORD.STOPPED")
-
 
 @pytest_asyncio.fixture
 async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory):

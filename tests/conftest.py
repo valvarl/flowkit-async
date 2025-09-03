@@ -1,12 +1,12 @@
 # conftest.py
 from __future__ import annotations
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Tuple
 
 import pytest
 import pytest_asyncio
 
 from tests.helpers import install_inmemory_db, setup_env_and_imports
-from tests.helpers.handlers import (  # теперь билдеры принимают db
+from tests.helpers.handlers import (
     build_cancelable_source_handler,
     build_counting_source_handler,
     build_flaky_once_handler,
@@ -14,7 +14,7 @@ from tests.helpers.handlers import (  # теперь билдеры приним
     build_permanent_fail_handler,
     build_slow_source_handler,
 )
-from tests.helpers.graph import node_by_id, wait_task_status, make_graph  # для удобства импорта в тестах
+from tests.helpers.graph import node_by_id, wait_task_status, make_graph  # re-export
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -29,6 +29,10 @@ def pytest_configure(config):
         "markers",
         "use_handlers(names): restrict which test handlers to instantiate",
     )
+    config.addinivalue_line(
+        "markers",
+        "use_outbox: enable real Outbox dispatcher (no bypass)",
+    )
 
 def _cfg_overrides_from_marker(request):
     m = request.node.get_closest_marker("cfg")
@@ -36,7 +40,6 @@ def _cfg_overrides_from_marker(request):
     o_worker = (m.kwargs.get("worker") if m else {}) or {}
     return o_coord, o_worker
 
-# Быстрые дефолты для всех тестов (ускоряют цикл)
 _FAST_COORD = {
     "scheduler_tick_sec": 0.05,
     "discovery_window_sec": 0.05,
@@ -60,9 +63,19 @@ def _worker_types_from_marker(request, default: str) -> str:
     return default
 
 @pytest.fixture(scope="function")
-def env_and_imports(monkeypatch, request):
+def _outbox_env(monkeypatch, request):
+    use_real = bool(request.node.get_closest_marker("use_outbox"))
+    if use_real:
+        monkeypatch.setenv("TEST_USE_OUTBOX", "1")
+    else:
+        monkeypatch.delenv("TEST_USE_OUTBOX", raising=False)
+    return use_real
+
+@pytest.fixture(scope="function")
+def env_and_imports(monkeypatch, request, _outbox_env):
     """
-    Common bootstrap: in-mem Kafka + outbox bypass. Worker types via marker.
+    Common bootstrap: in-mem Kafka, optional real Outbox (via @use_outbox),
+    worker types by marker.
     """
     wt = _worker_types_from_marker(request, default="indexer,enricher,ocr,analyzer,source,flaky,a,b,c,noop,sleepy")
     cd, wu = setup_env_and_imports(monkeypatch, worker_types=wt)
@@ -70,9 +83,7 @@ def env_and_imports(monkeypatch, request):
 
 @pytest.fixture(scope="function")
 def inmemory_db(env_and_imports):
-    """
-    Single injection point for DB; easy to swap to a file-backed DB later.
-    """
+    """Single injection point for DB."""
     return install_inmemory_db()
 
 @pytest.fixture
@@ -89,6 +100,16 @@ def worker_cfg(env_and_imports, request):
     _, o_worker = _cfg_overrides_from_marker(request)
     overrides = {**_FAST_WORKER, **o_worker}
     return wu.WorkerConfig.load(overrides=overrides)
+
+@pytest_asyncio.fixture
+async def coord(env_and_imports, inmemory_db, coord_cfg):
+    cd, _ = env_and_imports
+    c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
+    await c.start()
+    try:
+        yield c
+    finally:
+        await c.stop()
 
 # ───────────────────── ЕДИНАЯ ФАБРИКА ВОРКЕРОВ ─────────────────────
 
@@ -108,7 +129,6 @@ async def worker_factory(env_and_imports, inmemory_db, worker_cfg):
     async def _spawn(*specs: Tuple[str, Any]):
         ws = []
         for role, handler in specs:
-            # Handlers already constructed with db via unified signature
             w = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=[role], handlers={role: handler})
             await w.start()
             started.append(w)

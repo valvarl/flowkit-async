@@ -33,26 +33,6 @@ from tests.helpers.graph import prime_graph, make_graph, node_by_id, wait_task_s
 pytestmark = pytest.mark.worker_types("sleepy,noop,flaky")
 
 
-# ───────────────────────── Fixtures ─────────────────────────
-
-@pytest_asyncio.fixture
-async def coord(env_and_imports, inmemory_db, coord_cfg):
-    """Coordinator bound to in-memory DB with fast defaults (see conftest.py)."""
-    cd, _ = env_and_imports
-    c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
-    dbg("COORD.STARTING")
-    await c.start()
-    dbg("COORD.STARTED")
-    try:
-        yield c
-    finally:
-        dbg("COORD.STOPPING")
-        await c.stop()
-        dbg("COORD.STOPPED")
-
-
-# ───────────────────────── Tests ─────────────────────────
-
 @pytest.mark.cfg(coord={"heartbeat_soft_sec": 0.4, "heartbeat_hard_sec": 5.0},
                  worker={"hb_interval_sec": 1.0})
 @pytest.mark.asyncio

@@ -55,6 +55,25 @@ async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0
         await asyncio.sleep(0.02)
     raise AssertionError(f"node {node_id} not running in time")
 
+async def wait_node_not_running_for(db, task_id: str, node_id: str, hold: float = 0.6) -> None:
+    """
+    Ensure that a node does NOT enter 'running' within a small hold window.
+    Useful for negative checks when downstream must wait for upstream completion.
+    """
+    from time import time
+
+    t0 = time()
+    seen_running = False
+    while time() - t0 < hold:
+        doc = await db.tasks.find_one({"id": task_id})
+        n = node_by_id(doc or {}, node_id)
+        st =  n.get("status") if n else None
+        if str(st).endswith("running"):
+            seen_running = True
+            break
+        await asyncio.sleep(0.03)
+    assert not seen_running, f"{node_id} unexpectedly started during hold window"
+
 def node_by_id(doc: Dict[str, Any] | None, node_id: str) -> Dict[str, Any]:
     """
     Return node document from task snapshot by node_id, or {} if not found.

@@ -43,30 +43,6 @@ from tests.helpers.graph import (
 pytestmark = pytest.mark.worker_types("source,flaky,a,b,c")
 
 
-# ───────────────────────── Fixtures ─────────────────────────
-
-
-@pytest_asyncio.fixture
-async def coord(env_and_imports, inmemory_db, coord_cfg):
-    """
-    Coordinator with a fast config bound to the in-memory DB.
-    """
-    cd, _ = env_and_imports
-    c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
-    dbg("COORD.STARTING")
-    await c.start()
-    dbg("COORD.STARTED")
-    try:
-        yield c
-    finally:
-        dbg("COORD.STOPPING")
-        await c.stop()
-        dbg("COORD.STOPPED")
-
-
-# ───────────────────────── Tests ─────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_idempotent_metrics_on_duplicate_events(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
     """
