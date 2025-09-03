@@ -78,7 +78,6 @@ jobs:
           mypy src
 
   tests:
-    # Запускаем тесты ВСЕГДА, даже если линт упал
     if: ${{ always() }}
     name: Tests (pytest --count=10)
     needs: [lint]
@@ -103,27 +102,20 @@ jobs:
 
       - name: Install project + test deps
         run: |
-          # Если есть extras [test], используем их; иначе — фоллбэк.
-          if python - <<'PY'
-import tomllib, sys, pathlib
-p = pathlib.Path("pyproject.toml")
-sys.exit(0 if p.exists() and b"[project.optional-dependencies]" in p.read_bytes() else 1)
-PY
-          then
+          if [ -f pyproject.toml ] && grep -q "\[project\.optional-dependencies\]" pyproject.toml; then
             pip install -e .[test]
           elif [ -f requirements.txt ]; then
             pip install -r requirements.txt
+            pip install -e .
+          else
+            pip install -e .
           fi
-          # Гарантируем плагины pytest
           pip install "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-repeat>=0.9"
 
       - name: Show pytest environment
         run: |
-          python -c "import sys, pkgutil; print(sys.version)"
-          python - <<'PY'
-import pkgutil
-print("Installed pytest plugins:", [m.name for m in pkgutil.iter_modules() if m.name.startswith('pytest')])
-PY
+          python -c "import sys; print(sys.version)"
+          python -c "import pkgutil; print('Installed pytest plugins:', [m.name for m in pkgutil.iter_modules() if m.name.startswith('pytest')])"
 
       - name: Run tests (10x)
         run: |
@@ -135,7 +127,6 @@ PY
             --durations=25 \
             --junitxml=reports/junit.xml
 
-      # Публикуем отчёт всегда (даже если тесты упали)
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
