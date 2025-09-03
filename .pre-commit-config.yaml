@@ -1,12 +1,78 @@
+# .pre-commit-config.yaml
+minimum_pre_commit_version: "3.6.0"
+
+default_language_version:
+  python: python3.12
+
+exclude: |
+  (?x)^(
+    \.git/
+    | \.venv/|venv/|env/
+    | \.pytest_cache/
+    | build/|dist/
+    | .*\.egg-info/
+    | reports/
+  )$
+
 repos:
+  # ───────── Ruff (lint + isort автофикс) ─────────
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.6.9
     hooks:
       - id: ruff
-        args: [--fix]
-      - id: ruff-format
+        name: ruff (lint + autofix)
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(src|tests)/.*\.py$
+
+  # ───────── Black (форматтер как в CI) ─────────
   - repo: https://github.com/psf/black
     rev: 24.8.0
     hooks:
       - id: black
-        language_version: python3
+        language_version: python3.12
+        files: ^(src|tests)/.*\.py$
+
+  # ───────── Mypy (берёт конфиг из pyproject.toml → [tool.mypy]) ─────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        name: mypy (src only)
+        files: ^src/.*\.py$
+        # без --config-file: mypy сам прочитает [tool.mypy] из pyproject.toml
+        additional_dependencies:
+          - types-setuptools
+
+  # ───────── Bandit (security lint кода) — только на push ─────────
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        name: bandit (src only)
+        args: [-q, -r, src, -x, tests]
+        stages: [pre-push]
+        pass_filenames: false
+
+  # ───────── pip-audit (CVE по зависимостям) — только на push ─────────
+  # У тебя нет requirements.txt → сканим текущее окружение (dev deps тоже ок).
+  - repo: local
+    hooks:
+      - id: pip-audit
+        name: pip-audit (environment)
+        entry: bash -lc 'pip-audit'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+
+  # ───────── Базовые sanity-хуки ─────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      - id: detect-private-key
+      - id: check-added-large-files

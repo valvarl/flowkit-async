@@ -110,6 +110,18 @@ exclude = '''
 )/
 '''
 
+# ── MyPy (типизация) ────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+# Не душим разработку: начинаем мягко, потом можно ужесточать
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = true
+show_error_codes = true
+pretty = true
+# Мы и так запускаем mypy только по src, но на всякий случай:
+exclude = ["tests/"]
+
 # ── Coverage (опционально) ───────────────────────────────────
 [tool.coverage.run]
 branch = true

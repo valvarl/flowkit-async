@@ -27,27 +27,43 @@ on:
       - "setup.cfg"
       - "tox.ini"
   workflow_dispatch:
+    inputs:
+      flake_hunt:
+        description: "Run flake-hunt job (heavy: repeats + random order)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_PYTHON_VERSION_WARNING: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   lint:
     name: Lint (ruff + black + mypy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
+        id: py
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,6 +72,14 @@ jobs:
             pyproject.toml
             requirements*.txt
 
+      - name: Cache linters (ruff & mypy)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ruff
+            .mypy_cache
+          key: ${{ runner.os }}-py${{ steps.py.outputs.python-version }}-lintcache-${{ hashFiles('pyproject.toml','ruff.toml','.ruff.toml','mypy.ini','setup.cfg') }}
+
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
@@ -63,7 +87,6 @@ jobs:
         run: |
           pip install "ruff>=0.5" "black>=24.0" "mypy>=1.10" types-setuptools
 
-      # ── Ruff → JUnit ──────────────────────────────────────────────
       - name: Ruff (lint → JUnit)
         id: ruff
         run: |
@@ -71,11 +94,8 @@ jobs:
           set +e
           ruff --version
           ruff check src tests --output-format junit --output-file reports/ruff-junit.xml
-          CODE=$?
-          echo "code=$CODE" >> $GITHUB_OUTPUT
-          exit 0
+          echo "code=$?" >> "$GITHUB_OUTPUT"
 
-      # ── Black → JUnit (оборачиваем вывод) ────────────────────────
       - name: Black (check → JUnit)
         id: black
         run: |
@@ -88,23 +108,19 @@ jobs:
           {
             echo '<?xml version="1.0" encoding="UTF-8"?>'
             if [ $CODE -eq 0 ]; then
-              echo '<testsuite name="black" tests="1" failures="0" errors="0">'
-              echo '  <testcase classname="black" name="formatting" />'
-              echo '</testsuite>'
+              echo '<testsuite name="black" tests="1" failures="0" errors="0"><testcase classname="black" name="formatting"/></testsuite>'
             else
               echo '<testsuite name="black" tests="1" failures="1" errors="0">'
               echo '  <testcase classname="black" name="formatting">'
               echo '    <failure message="Black formatting issues"><![CDATA['
-              printf "%s\n" "$OUT"
+              cat reports/black-output.txt
               echo '    ]]></failure>'
               echo '  </testcase>'
               echo '</testsuite>'
             fi
           } > reports/black-junit.xml
-          echo "code=$CODE" >> $GITHUB_OUTPUT
-          exit 0
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
 
-      # ── Mypy → JUnit ──────────────────────────────────────────────
       - name: Mypy (type check → JUnit)
         id: mypy
         run: |
@@ -112,9 +128,7 @@ jobs:
           set +e
           mypy --version
           mypy src --junit-xml reports/mypy-junit.xml
-          CODE=$?
-          echo "code=$CODE" >> $GITHUB_OUTPUT
-          exit 0
+          echo "code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Upload Lint reports (artifacts)
         if: always()
@@ -132,30 +146,29 @@ jobs:
           files: "reports/*.xml"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           check_name: "Lint Results"
-          # чек-ран только если не форк, иначе просто коммент
           check_run: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           comment_mode: ${{ github.event_name == 'pull_request' && 'always' || 'off' }}
           fail_on: nothing
 
-      # Отметим job красным, если есть проблемы (но публикация уже произошла)
       - name: Fail job if linters failed
         if: ${{ steps.ruff.outputs.code != '0' || steps.black.outputs.code != '0' || steps.mypy.outputs.code != '0' }}
         run: |
-          echo "Some linters failed: ruff=${{ steps.ruff.outputs.code }}, black=${{ steps.black.outputs.code }}, mypy=${{ steps.mypy.outputs.code }}" >&2
+          echo "Linters failed: ruff=${{ steps.ruff.outputs.code }}, black=${{ steps.black.outputs.code }}, mypy=${{ steps.mypy.outputs.code }}" >&2
           exit 1
 
   tests:
-    # Тесты запускаются даже если lint упал
     if: ${{ always() }}
-    name: Tests (pytest --count=10)
+    name: Tests (pytest --count=10 + coverage)
     needs: [lint]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
+    timeout-minutes: 45
     permissions:
       contents: read
       checks: write
       pull-requests: write
+
+    env:
+      PYTEST_RANDOMLY_SEED: ${{ github.run_number }}
 
     steps:
       - name: Checkout
@@ -183,30 +196,46 @@ jobs:
           else
             pip install -e .
           fi
-          pip install "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-repeat>=0.9"
+          pip install "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-repeat>=0.9" "pytest-timeout>=2.3" "pytest-randomly>=3.15" "pytest-cov>=4.1"
 
-      - name: Show pytest environment
-        run: |
-          python -c "import sys; print(sys.version)"
-          python -c "import pkgutil; print('Installed pytest plugins:', [m.name for m in pkgutil.iter_modules() if m.name.startswith('pytest')])"
-
-      - name: Run tests (10x)
+      - name: Run tests (10x, no fail-fast) + Coverage
         run: |
           mkdir -p reports
-          pytest -q \
+          pytest tests \
             --count=10 \
-            -ra \
-            --maxfail=1 \
+            --maxfail=0 \
+            -ra -vv \
+            --timeout=60 --timeout-method=thread \
             --durations=25 \
-            --junitxml=reports/junit.xml
+            --junitxml=reports/junit.xml \
+            --cov=src \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-report=term-missing
 
-      - name: Upload JUnit report
+      - name: Coverage HTML + Summary
+        if: always()
+        run: |
+          python -m coverage html -d reports/htmlcov || true
+          python -m coverage report -m | tee reports/coverage.txt
+          {
+            echo "## Coverage summary"
+            echo
+            echo '```'
+            cat reports/coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-report
-          path: reports/junit.xml
-          if-no-files-found: ignore
+          name: test-artifacts
+          path: |
+            reports/junit.xml
+            reports/coverage.xml
+            reports/coverage.txt
+            reports/htmlcov
+          if-no-files-found: warn
 
       - name: Publish Test Results
         if: always()
@@ -219,3 +248,130 @@ jobs:
           check_run: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           comment_mode: ${{ github.event_name == 'pull_request' && 'always' || 'off' }}
           fail_on: test failures
+
+  flake_hunt:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.flake_hunt == 'true' }}
+    name: "Flake Hunt (stress: repeats + random order)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    env:
+      PYTEST_RANDOMLY_SEED: ${{ github.run_number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+      - name: Install deps
+        run: |
+          pip install -e .
+          pip install "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-repeat>=0.9" "pytest-timeout>=2.3" "pytest-randomly>=3.15"
+      - name: Stress run (30x, randomized)
+        run: |
+          mkdir -p reports
+          pytest tests \
+            --count=30 \
+            --maxfail=0 \
+            -ra -vv \
+            --timeout=90 --timeout-method=thread \
+            --durations=40 \
+            --junitxml=reports/flakehunt.xml
+      - name: Upload Flake Hunt report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-hunt-report
+          path: reports/flakehunt.xml
+      - name: Publish Flake Hunt Results
+        if: always()
+        continue-on-error: true
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: "reports/flakehunt.xml"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          check_name: "Flake Hunt Results"
+          check_run: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          comment_mode: "off"
+          fail_on: nothing
+
+  security:
+    name: Security (pip-audit + bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      security-events: write   # для загрузки SARIF в Code Scanning
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install project + security tools
+        run: |
+          pip install -e .
+          pip install pip-audit bandit
+
+      - name: pip-audit (deps advisories → JSON)
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true
+          else
+            pip-audit -f json -o reports/pip-audit.json || true
+          fi
+          {
+            echo "## Security summary"
+            echo
+            echo "### pip-audit (first part of report)"
+            echo '```json'
+            head -c 40000 reports/pip-audit.json || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: bandit (static code scan → SARIF)
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          bandit -q -r src -f sarif -o reports/bandit.sarif || true
+
+      - name: Upload security artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            reports/pip-audit.json
+            reports/bandit.sarif
+          if-no-files-found: warn
+
+      - name: Upload SARIF to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/bandit.sarif
