@@ -311,7 +311,7 @@ jobs:
     timeout-minutes: 12
     permissions:
       contents: read
-      security-events: write   # для загрузки SARIF в Code Scanning
+      security-events: write
       checks: write
       pull-requests: write
 
@@ -354,11 +354,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: bandit (static code scan → SARIF)
+      - name: bandit (static code scan → JSON)
         continue-on-error: true
         run: |
           mkdir -p reports
-          bandit -q -r src -f sarif -o reports/bandit.sarif || true
+          bandit -q -r src -f json -o reports/bandit.json || true
 
       - name: Upload security artifacts
         if: always()
@@ -367,11 +367,12 @@ jobs:
           name: security-reports
           path: |
             reports/pip-audit.json
-            reports/bandit.sarif
+            reports/bandit.json
           if-no-files-found: warn
 
-      - name: Upload SARIF to Code Scanning
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: reports/bandit.sarif
+      # Optional: upload SARIF only if you later add a converter
+      # - name: Upload SARIF to Code Scanning
+      #   if: ${{ hashFiles('reports/bandit.sarif') != '' }}
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: reports/bandit.sarif
