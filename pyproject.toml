@@ -13,6 +13,7 @@ authors = [{ name = "Flowkit authors" }]
 
 # Runtime dependencies
 dependencies = [
+  "anyio>=4.1",
   "aiokafka>=0.8.2",
   "pydantic>=2.5",
 ]
