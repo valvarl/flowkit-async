@@ -58,9 +58,12 @@ repos:
   - repo: local
     hooks:
       - id: pip-audit
-        name: pip-audit (environment)
-        entry: bash -lc 'pip-audit'
-        language: system
+        name: pip-audit (project deps only, pre-push)
+        language: python
+        additional_dependencies:
+          - pip-audit
+        # Устанавливаем твой проект в venv pre-commit'а и сканируем ТОЛЬКО его граф
+        entry: bash -lc 'pip install -q -e .[dev] || pip install -q -e .; pip-audit'
         stages: [pre-push]
         pass_filenames: false
 
