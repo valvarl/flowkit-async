@@ -32,11 +32,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
 jobs:
   lint:
-    name: Lint (ruff + black --check)
+    name: Lint (ruff + black + mypy)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -56,33 +61,101 @@ jobs:
 
       - name: Install linters
         run: |
-          pip install "ruff>=0.5" "black>=24.0"
+          pip install "ruff>=0.5" "black>=24.0" "mypy>=1.10" types-setuptools
 
-      # Проверяем синтаксис/импорт/часть best-practices
-      - name: Ruff (lint)
+      # ── Ruff → JUnit ──────────────────────────────────────────────
+      - name: Ruff (lint → JUnit)
+        id: ruff
         run: |
+          mkdir -p reports
+          set +e
           ruff --version
-          ruff check src tests
+          ruff check src tests --output-format junit --output-file reports/ruff-junit.xml
+          CODE=$?
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          exit 0
 
-      # Проверяем форматирование без авто-правок
-      - name: Black (check)
+      # ── Black → JUnit (оборачиваем вывод) ────────────────────────
+      - name: Black (check → JUnit)
+        id: black
         run: |
+          mkdir -p reports
+          set +e
           black --version
-          black --check --diff src tests
+          OUT=$(black --check --diff src tests 2>&1)
+          CODE=$?
+          echo "$OUT" > reports/black-output.txt
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            if [ $CODE -eq 0 ]; then
+              echo '<testsuite name="black" tests="1" failures="0" errors="0">'
+              echo '  <testcase classname="black" name="formatting" />'
+              echo '</testsuite>'
+            else
+              echo '<testsuite name="black" tests="1" failures="1" errors="0">'
+              echo '  <testcase classname="black" name="formatting">'
+              echo '    <failure message="Black formatting issues"><![CDATA['
+              printf "%s\n" "$OUT"
+              echo '    ]]></failure>'
+              echo '  </testcase>'
+              echo '</testsuite>'
+            fi
+          } > reports/black-junit.xml
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          exit 0
 
-      - name: Mypy (soft)
-        continue-on-error: true
+      # ── Mypy → JUnit ──────────────────────────────────────────────
+      - name: Mypy (type check → JUnit)
+        id: mypy
         run: |
-          pip install "mypy>=1.10" types-setuptools
+          mkdir -p reports
+          set +e
           mypy --version
-          mypy src
+          mypy src --junit-xml reports/mypy-junit.xml
+          CODE=$?
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          exit 0
+
+      - name: Upload Lint reports (artifacts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: reports/*.xml
+          if-no-files-found: warn
+
+      - name: Publish Lint Results
+        if: always()
+        continue-on-error: true
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: "reports/*.xml"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          check_name: "Lint Results"
+          # чек-ран только если не форк, иначе просто коммент
+          check_run: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          comment_mode: ${{ github.event_name == 'pull_request' && 'always' || 'off' }}
+          fail_on: nothing
+
+      # Отметим job красным, если есть проблемы (но публикация уже произошла)
+      - name: Fail job if linters failed
+        if: ${{ steps.ruff.outputs.code != '0' || steps.black.outputs.code != '0' || steps.mypy.outputs.code != '0' }}
+        run: |
+          echo "Some linters failed: ruff=${{ steps.ruff.outputs.code }}, black=${{ steps.black.outputs.code }}, mypy=${{ steps.mypy.outputs.code }}" >&2
+          exit 1
 
   tests:
+    # Тесты запускаются даже если lint упал
     if: ${{ always() }}
     name: Tests (pytest --count=10)
     needs: [lint]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
 
     steps:
       - name: Checkout
@@ -135,8 +208,14 @@ jobs:
           path: reports/junit.xml
           if-no-files-found: ignore
 
-      - name: Publish test results
+      - name: Publish Test Results
         if: always()
+        continue-on-error: true
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
           files: "reports/junit.xml"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          check_name: "Test Results"
+          check_run: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          comment_mode: ${{ github.event_name == 'pull_request' && 'always' || 'off' }}
+          fail_on: test failures
