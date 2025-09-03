@@ -129,7 +129,7 @@ class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
         if n: return self.wu.BatchResult(success=True, metrics={"count": n, "sinked": n})  # type: ignore[attr-defined]
         return self.wu.BatchResult(success=True, metrics={"noop": 1})
 
-def make_test_handlers(wu, include: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+def make_test_handlers(wu, db, include: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """
     Returns instantiated handlers for selected roles.
     Example: make_test_handlers(wu, include=["indexer","analyzer"])
@@ -154,10 +154,7 @@ def make_test_handlers(wu, include: Optional[Iterable[str]] = None) -> Dict[str,
             db=db_obj,
         )
 
-    # db попадёт из фикстуры conftest.handlers (см. правку ниже)
-    import inspect
-    caller_locals = inspect.currentframe().f_back.f_locals if inspect.currentframe() else {}
-    _db = caller_locals.get("_TESTS_DB")  # проставим его из conftest
+    _db = db
 
     for name in names:
         cls = registry[name]
