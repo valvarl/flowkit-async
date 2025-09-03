@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main, develop, feature/** ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - ".github/workflows/**"
+      - "ruff.toml"
+      - ".ruff.toml"
+      - "mypy.ini"
+      - "setup.cfg"
+      - "tox.ini"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - ".github/workflows/**"
+      - "ruff.toml"
+      - ".ruff.toml"
+      - "mypy.ini"
+      - "setup.cfg"
+      - "tox.ini"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff + black --check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install linters
+        run: |
+          pip install "ruff>=0.5" "black>=24.0"
+
+      # Проверяем синтаксис/импорт/часть best-practices
+      - name: Ruff (lint)
+        run: |
+          ruff --version
+          ruff check src tests
+
+      # Проверяем форматирование без авто-правок
+      - name: Black (check)
+        run: |
+          black --version
+          black --check --diff src tests
+
+      - name: Mypy (soft)
+        continue-on-error: true
+        run: |
+          pip install "mypy>=1.10" types-setuptools
+          mypy --version
+          mypy src
+
+  tests:
+    # Запускаем тесты ВСЕГДА, даже если линт упал
+    if: ${{ always() }}
+    name: Tests (pytest --count=10)
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install project + test deps
+        run: |
+          # Если есть extras [test], используем их; иначе — фоллбэк.
+          if python - <<'PY'
+import tomllib, sys, pathlib
+p = pathlib.Path("pyproject.toml")
+sys.exit(0 if p.exists() and b"[project.optional-dependencies]" in p.read_bytes() else 1)
+PY
+          then
+            pip install -e .[test]
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # Гарантируем плагины pytest
+          pip install "pytest>=8.0" "pytest-asyncio>=0.23" "pytest-repeat>=0.9"
+
+      - name: Show pytest environment
+        run: |
+          python -c "import sys, pkgutil; print(sys.version)"
+          python - <<'PY'
+import pkgutil
+print("Installed pytest plugins:", [m.name for m in pkgutil.iter_modules() if m.name.startswith('pytest')])
+PY
+
+      - name: Run tests (10x)
+        run: |
+          mkdir -p reports
+          pytest -q \
+            --count=10 \
+            -ra \
+            --maxfail=1 \
+            --durations=25 \
+            --junitxml=reports/junit.xml
+
+      # Публикуем отчёт всегда (даже если тесты упали)
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: reports/junit.xml
+          if-no-files-found: ignore
+
+      - name: Publish test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: "reports/junit.xml"

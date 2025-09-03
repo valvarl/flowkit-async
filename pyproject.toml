@@ -69,15 +69,46 @@ markers = [
 
 # ── Ruff (линтер) ────────────────────────────────────────────
 [tool.ruff]
+target-version = "py312"
 line-length = 120
-target-version = "py311"
-select = ["E","F","I","UP","B"]
-ignore = ["E203"] # совместимость с Black вокруг двоеточий в слайсах
+extend-exclude = ["build", "dist"]
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Подборка полезных правил (без излишнего шума)
+select = [
+  "E",    # pycodestyle (errors)
+  "F",    # pyflakes
+  "I",    # isort (импорт-упорядочивание)
+  "UP",   # pyupgrade
+  "B",    # flake8-bugbear
+  "ASYNC",# flake8-async
+  "W",    # pycodestyle (warnings)
+  "PERF", # perflint
+  "RUF",  # ruff-specific
+]
+ignore = [
+  "E203", # Совместимость с black по срезам
+]
+
+[tool.ruff.format]
+# Мы используем black для форматирования; у ruff только lint.
+quote-style = "preserve"
 
 # ── Black (форматтер) ────────────────────────────────────────
 [tool.black]
 line-length = 120
-target-version = ["py311"]
+target-version = ["py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | \.pytest_cache
+  | build
+  | dist
+)/
+'''
 
 # ── Coverage (опционально) ───────────────────────────────────
 [tool.coverage.run]
