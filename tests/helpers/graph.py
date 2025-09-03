@@ -39,6 +39,22 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> Dict[st
         await asyncio.sleep(0.05)
     raise AssertionError("task not finished in time")
 
+async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0):
+    """
+    Poll the task document until a specific node reaches the 'running' state.
+    Returns the latest task snapshot. Raises on timeout.
+    """
+    from time import time
+    t0 = time()
+    while time() - t0 < timeout:
+        doc = await db.tasks.find_one({"id": task_id})
+        if doc:
+            st = (node_by_id(doc, node_id) or {}).get("status")
+            if str(st).endswith("running"):
+                return doc
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"node {node_id} not running in time")
+
 def node_by_id(doc: Dict[str, Any] | None, node_id: str) -> Dict[str, Any]:
     """
     Return node document from task snapshot by node_id, or {} if not found.
