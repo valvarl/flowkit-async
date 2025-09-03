@@ -61,6 +61,7 @@ filterwarnings = [
 markers = [
   "worker_types(name): override worker types for this test module",
   "use_handlers(names): restrict which test handlers to instantiate",
+  "cfg(coord=None, worker=None): per-test Coordinator/Worker config overrides",
 ]
 
 # ── Ruff (линтер) ────────────────────────────────────────────

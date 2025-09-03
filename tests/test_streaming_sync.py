@@ -11,13 +11,17 @@ This suite validates:
 All tests rely on in-memory Kafka and DB, configured via fixtures from `conftest.py`.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any, Dict, Optional
 
 import pytest
 import pytest_asyncio
 
-from tests.helpers import BROKER, AIOKafkaProducerMock, dbg, prime_graph, wait_task_finished
+from tests.helpers import BROKER, AIOKafkaProducerMock, dbg
+from tests.helpers.handlers import build_indexer_handler, build_analyzer_handler
+from tests.helpers.graph import prime_graph, wait_task_finished, node_by_id, make_graph
 
 # Limit worker types for this module (see conftest._worker_types_from_marker).
 pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
@@ -44,57 +48,6 @@ async def coord(env_and_imports, inmemory_db, coord_cfg):
         dbg("COORD.STOPPED")
 
 
-@pytest_asyncio.fixture
-async def workers_indexer_analyzer(env_and_imports, handlers, inmemory_db, worker_cfg):
-    """
-    Start a minimal worker set: one 'indexer' upstream and one 'analyzer' downstream.
-    Handlers come from `conftest.handlers`.
-    """
-    _, wu = env_and_imports
-    w_idx = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["indexer"], handlers={"indexer": handlers["indexer"]})
-    w_ana = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["analyzer"], handlers={"analyzer": handlers["analyzer"]})
-
-    for name, w in (("indexer", w_idx), ("analyzer", w_ana)):
-        dbg("WORKER.STARTING", role=name)
-        await w.start()
-        dbg("WORKER.STARTED", role=name)
-
-    try:
-        yield (w_idx, w_ana)
-    finally:
-        for name, w in (("indexer", w_idx), ("analyzer", w_ana)):
-            dbg("WORKER.STOPPING", role=name)
-            await w.stop()
-            dbg("WORKER.STOPPED", role=name)
-
-
-@pytest_asyncio.fixture
-async def workers_3indexers_analyzer(env_and_imports, handlers, inmemory_db, worker_cfg):
-    """
-    Start three independent 'indexer' workers (same role, shared consumer group in in-mem Kafka)
-    and a single 'analyzer' downstream. This creates real competition in the group.
-    """
-    _, wu = env_and_imports
-    w_idx1 = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["indexer"], handlers={"indexer": handlers["indexer"]})
-    w_idx2 = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["indexer"], handlers={"indexer": handlers["indexer"]})
-    w_idx3 = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["indexer"], handlers={"indexer": handlers["indexer"]})
-    w_ana = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=["analyzer"], handlers={"analyzer": handlers["analyzer"]})
-
-    workers = [("indexer#1", w_idx1), ("indexer#2", w_idx2), ("indexer#3", w_idx3), ("analyzer", w_ana)]
-    for name, w in workers:
-        dbg("WORKER.STARTING", role=name)
-        await w.start()
-        dbg("WORKER.STARTED", role=name)
-
-    try:
-        yield (w_idx1, w_idx2, w_idx3, w_ana)
-    finally:
-        for name, w in workers:
-            dbg("WORKER.STOPPING", role=name)
-            await w.stop()
-            dbg("WORKER.STOPPED", role=name)
-
-
 # ───────────────────────── Small helpers ─────────────────────────
 
 
@@ -105,10 +58,8 @@ async def _get_task(db, task_id: str) -> Optional[Dict[str, Any]]:
 
 def _node_status(doc: Dict[str, Any], node_id: str) -> Any:
     """Get node status by node_id from a task doc."""
-    for n in (doc.get("graph", {}).get("nodes") or []):
-        if n.get("node_id") == node_id:
-            return n.get("status")
-    return None
+    n = node_by_id(doc, node_id)
+    return n.get("status") if n else None
 
 
 async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 5.0) -> Dict[str, Any]:
@@ -165,40 +116,9 @@ def _make_indexer(node_id: str, total: int, batch: int) -> Dict[str, Any]:
     }
 
 
-def add_metrics_agg(graph: Dict[str, Any], *, target: str = "d", name: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Add a coordinator_fn node that aggregates metrics of `target` node into its graph node.stats.
-    The function used is `metrics.aggregate` with mode='sum'.
-    """
-    name = name or f"agg_{target}"
-    graph.setdefault("nodes", [])
-    graph.setdefault("edges", [])
-    graph["nodes"].append(
-        {
-            "node_id": name,
-            "type": "coordinator_fn",
-            "depends_on": [target],
-            "fan_in": "all",
-            "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": target, "mode": "sum"}},
-            "status": None,
-            "attempt_epoch": 0,
-        }
-    )
-    graph["edges"].append([target, name])
-    return graph
-
-
-def _node_by_id(doc: Dict[str, Any], node_id: str) -> Dict[str, Any]:
-    """Return the node dict by id from a task document."""
-    for n in (doc.get("graph", {}).get("nodes") or []):
-        if n.get("node_id") == node_id:
-            return n
-    return {}
-
-
 def _get_count(doc: Dict[str, Any], node_id: str) -> int:
     """Return the aggregated 'count' metric from a node's stats (0 if absent)."""
-    node = _node_by_id(doc or {}, node_id)
+    node = node_by_id(doc or {}, node_id)
     return int(((node.get("stats") or {}).get("count") or 0))
 
 
@@ -206,11 +126,18 @@ def _get_count(doc: Dict[str, Any], node_id: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Downstream should start while upstream is still running when `start_when=first_batch` is set.
     """
     cd, _ = env_and_imports
+
+    # Start workers via factory (separate handler instances, shared role topics).
+    spawn = worker_factory
+    await spawn(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     u = _make_indexer("u", total=12, batch=4)  # 3 upstream batches
     d = {
@@ -226,7 +153,7 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")])
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -248,11 +175,16 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
 
 
 @pytest.mark.asyncio
-async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Without `start_when`, downstream must not start until upstream completes.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     u = _make_indexer("u", total=10, batch=5)  # noticeable running window
     d = {
@@ -265,7 +197,7 @@ async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")])
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -283,12 +215,19 @@ async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db
 
 
 @pytest.mark.asyncio
-async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmemory_db, coord, workers_3indexers_analyzer):
+async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Multi-stream fan-in: three upstream indexers stream into one analyzer.
     Analyzer should start early on first batch and eventually see the full flow.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     # Three sources with several batches each.
     u1 = _make_indexer("u1", total=9, batch=3)   # 3 batches
@@ -308,8 +247,7 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d], "edges": [["u1", "d"], ["u2", "d"], ["u3", "d"]]}
-    graph = add_metrics_agg(graph, target="d")
+    graph = make_graph(nodes=[u1, u2, u3, d], edges=[("u1", "d"), ("u2", "d"), ("u3", "d")], agg={"after": "d"})
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -332,18 +270,22 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
     assert final["u3"] == cd.RunState.finished
 
     # Analyzer aggregated count should be at least the total items across sources.
-    d_node = next(n for n in tdoc["graph"]["nodes"] if n["node_id"] == "d")
-    got = int(((d_node.get("stats") or {}).get("count") or 0))
+    got = _get_count(tdoc, "d")
     dbg("MULTISTREAM.D.COUNT", count=got)
     assert got >= (9 + 8 + 12)
 
 
 @pytest.mark.asyncio
-async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Single upstream -> single downstream: analyzer's aggregated 'count' must equal the total items.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     total, batch = 13, 5  # 5 + 5 + 3
     u = _make_indexer("u", total=total, batch=batch)
@@ -359,8 +301,7 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
         "status": None,
         "attempt_epoch": 0,
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
-    graph = add_metrics_agg(graph, target="d")
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -372,11 +313,18 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
 
 
 @pytest.mark.asyncio
-async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord, workers_3indexers_analyzer):
+async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Three upstreams -> one downstream: analyzer's aggregated 'count' must equal the sum of all totals.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     totals = {"u1": 6, "u2": 7, "u3": 9}  # sum = 22
     u1 = _make_indexer("u1", total=totals["u1"], batch=3)
@@ -395,8 +343,7 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
         "status": None,
         "attempt_epoch": 0,
     }
-    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d], "edges": [["u1", "d"], ["u2", "d"], ["u3", "d"]]}
-    graph = add_metrics_agg(graph, target="d")
+    graph = make_graph(nodes=[u1, u2, u3, d], edges=[("u1", "d"), ("u2", "d"), ("u3", "d")], agg={"after": "d"})
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -409,11 +356,16 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
 
 
 @pytest.mark.asyncio
-async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db, coord, worker_factory):
     """
     With a remainder in the last upstream batch, analyzer's 'count' must still exactly equal total.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     total, batch = 10, 3  # 3 + 3 + 3 + 1
     u = _make_indexer("u", total=total, batch=batch)
@@ -429,8 +381,7 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
         "status": None,
         "attempt_epoch": 0,
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
-    graph = add_metrics_agg(graph, target="d")
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -442,11 +393,16 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
 
 
 @pytest.mark.asyncio
-async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coord, worker_factory):
     """
     Two back-to-back tasks must keep metric aggregation isolated per task document.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     async def run_once(total: int, batch: int):
         u = _make_indexer("u", total=total, batch=batch)
@@ -462,8 +418,7 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
             "status": None,
             "attempt_epoch": 0,
         }
-        g = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
-        g = add_metrics_agg(g, target="d")
+        g = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
         g = prime_graph(cd, g)
         tid = await coord.create_task(params={}, graph=g)
         tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
@@ -478,7 +433,7 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
 
 
 @pytest.mark.asyncio
-async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, monkeypatch):
+async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
     """
     Duplicate STATUS events (BATCH_OK / TASK_DONE) must not double-increment aggregated metrics.
 
@@ -486,6 +441,11 @@ async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, in
     for status topics. The Coordinator should deduplicate by envelope key and keep metrics stable.
     """
     cd, _ = env_and_imports
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
 
     # Save the original method to call once, then produce duplicate via broker.
     orig_send = AIOKafkaProducerMock.send_and_wait
@@ -516,8 +476,7 @@ async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, in
         "status": None,
         "attempt_epoch": 0,
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d], "edges": [["u", "d"]]}
-    graph = add_metrics_agg(graph, target="d")
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)

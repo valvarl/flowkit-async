@@ -1,7 +1,34 @@
+# conftest.py
+from __future__ import annotations
+from typing import Any, Dict, Iterable, List, Tuple
+
 import pytest
+import pytest_asyncio
 
 from tests.helpers import install_inmemory_db, setup_env_and_imports
-from tests.helpers.handlers import make_test_handlers
+from tests.helpers.handlers import (  # теперь билдеры принимают db
+    build_cancelable_source_handler,
+    build_counting_source_handler,
+    build_flaky_once_handler,
+    build_noop_handler,
+    build_permanent_fail_handler,
+    build_slow_source_handler,
+)
+from tests.helpers.graph import node_by_id, wait_task_status, make_graph  # для удобства импорта в тестах
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "cfg(coord=None, worker=None): per-test Coordinator/Worker config overrides",
+    )
+    config.addinivalue_line(
+        "markers",
+        "worker_types(name): override worker types for this test module",
+    )
+    config.addinivalue_line(
+        "markers",
+        "use_handlers(names): restrict which test handlers to instantiate",
+    )
 
 def _cfg_overrides_from_marker(request):
     m = request.node.get_closest_marker("cfg")
@@ -9,7 +36,7 @@ def _cfg_overrides_from_marker(request):
     o_worker = (m.kwargs.get("worker") if m else {}) or {}
     return o_coord, o_worker
 
-# Базовые быстрые значения для всех тестов
+# Быстрые дефолты для всех тестов (ускоряют цикл)
 _FAST_COORD = {
     "scheduler_tick_sec": 0.05,
     "discovery_window_sec": 0.05,
@@ -26,10 +53,31 @@ _FAST_WORKER = {
     "pull_empty_backoff_ms_max": 300,
 }
 
+def _worker_types_from_marker(request, default: str) -> str:
+    m = request.node.get_closest_marker("worker_types")
+    if m and m.args:
+        return m.args[0]
+    return default
+
+@pytest.fixture(scope="function")
+def env_and_imports(monkeypatch, request):
+    """
+    Common bootstrap: in-mem Kafka + outbox bypass. Worker types via marker.
+    """
+    wt = _worker_types_from_marker(request, default="indexer,enricher,ocr,analyzer,source,flaky,a,b,c,noop,sleepy")
+    cd, wu = setup_env_and_imports(monkeypatch, worker_types=wt)
+    return cd, wu
+
+@pytest.fixture(scope="function")
+def inmemory_db(env_and_imports):
+    """
+    Single injection point for DB; easy to swap to a file-backed DB later.
+    """
+    return install_inmemory_db()
+
 @pytest.fixture
 def coord_cfg(env_and_imports, request):
     cd, _ = env_and_imports
-    # получаем worker_types из маркера, чтобы не ходить в ENV
     wt = _worker_types_from_marker(request, default="indexer,enricher,ocr,analyzer,source,flaky,a,b,c,noop,sleepy")
     o_coord, _ = _cfg_overrides_from_marker(request)
     overrides = {"worker_types": [s.strip() for s in wt.split(",") if s.strip()], **_FAST_COORD, **o_coord}
@@ -42,34 +90,36 @@ def worker_cfg(env_and_imports, request):
     overrides = {**_FAST_WORKER, **o_worker}
     return wu.WorkerConfig.load(overrides=overrides)
 
-def _worker_types_from_marker(request, default: str) -> str:
-    m = request.node.get_closest_marker("worker_types")
-    if m and m.args:
-        return m.args[0]
-    return default
+# ───────────────────── ЕДИНАЯ ФАБРИКА ВОРКЕРОВ ─────────────────────
 
-@pytest.fixture(scope="function")
-def env_and_imports(monkeypatch, request):
+@pytest_asyncio.fixture
+async def worker_factory(env_and_imports, inmemory_db, worker_cfg):
     """
-    Common bootstrap: in-mem Kafka, fast coordinator loops, outbox bypass.
-    Worker types can be overridden via @pytest.mark.worker_types("a,b,c").
-    """
-    wt = _worker_types_from_marker(request, default="indexer,enricher,ocr,analyzer,source,flaky,a,b,c,noop,sleepy")
-    cd, wu = setup_env_and_imports(monkeypatch, worker_types=wt)
-    return cd, wu
+    Return async function `spawn(*specs)` to start N workers and auto-stop them on teardown.
 
-@pytest.fixture(scope="function")
-def inmemory_db(env_and_imports):
-    return install_inmemory_db()
-
-@pytest.fixture
-def handlers(env_and_imports, request, inmemory_db):
-    """
-    Returns a dict of handlers; you can limit via:
-    @pytest.mark.use_handlers(["indexer","analyzer"])
+    Usage:
+        spawn = worker_factory
+        workers = await spawn(("source", build_counting_source_handler(db=inmemory_db, total=9, batch=3)),
+                              ("flaky", build_flaky_once_handler(db=inmemory_db)))
     """
     _, wu = env_and_imports
-    m = request.node.get_closest_marker("use_handlers")
-    include = m.args[0] if m and m.args else None
+    started = []
 
-    return make_test_handlers(wu, inmemory_db, include=include)
+    async def _spawn(*specs: Tuple[str, Any]):
+        ws = []
+        for role, handler in specs:
+            # Handlers already constructed with db via unified signature
+            w = wu.Worker(db=inmemory_db, cfg=worker_cfg, roles=[role], handlers={role: handler})
+            await w.start()
+            started.append(w)
+            ws.append(w)
+        return ws
+
+    try:
+        yield _spawn
+    finally:
+        for w in reversed(started):
+            try:
+                await w.stop()
+            except Exception:
+                pass
