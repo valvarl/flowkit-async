@@ -1,8 +1,6 @@
-# tests/test_cancel_and_restart.py
 from __future__ import annotations
 
 import asyncio
-import time
 from enum import Enum
 from typing import Dict
 
@@ -10,7 +8,7 @@ import pytest
 import pytest_asyncio
 
 from tests.helpers import AIOKafkaConsumerMock, BROKER, dbg
-from tests.helpers.graph import prime_graph, wait_task_finished
+from tests.helpers.graph import prime_graph, wait_task_finished, wait_node_running
 from tests.helpers.handlers import (
     build_analyzer_handler,
     build_flaky_once_handler,
@@ -22,23 +20,6 @@ pytestmark = pytest.mark.worker_types("indexer,analyzer,flaky")
 
 
 # ───────────────────────── Small helpers ─────────────────────────
-
-
-async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 6.0) -> bool:
-    """Poll task until specified node reaches 'running'."""
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        tdoc = await db.tasks.find_one({"id": task_id})
-        if tdoc:
-            for n in (tdoc.get("graph", {}) or {}).get("nodes", []):
-                st = n.get("status")
-                if isinstance(st, Enum):
-                    st = st.value
-                if n.get("node_id") == node_id and str(st).endswith("running"):
-                    return True
-        await asyncio.sleep(0.02)
-    return False
-
 
 def graph_cancel_flow() -> Dict:
     """
@@ -94,7 +75,6 @@ def graph_restart_flaky() -> Dict:
 
 # ───────────────────────── Fixtures ─────────────────────────
 
-
 @pytest_asyncio.fixture
 async def workers(worker_factory, inmemory_db):
     """
@@ -109,12 +89,10 @@ async def workers(worker_factory, inmemory_db):
         ("analyzer", ana),
         ("flaky", flk),
     )
-    # Return mapping for readability (not strictly required by tests)
     return {"indexer": ws[0], "analyzer": ws[1], "flaky": ws[2]}
 
 
 # ───────────────────────── Tests ─────────────────────────
-
 
 @pytest.mark.asyncio
 async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, coord, workers):
@@ -134,7 +112,7 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
     tid = await coord.create_task(params={}, graph=g)
 
     # Ensure producer (indexer) started
-    assert await wait_node_running(inmemory_db, tid, "w1", timeout=4.0), "indexer didn't start"
+    await wait_node_running(inmemory_db, tid, "w1", timeout=4.0)
 
     # Spy CANCELLED for indexer
     spy = AIOKafkaConsumerMock("status.indexer.v1", group_id="test.spy.cancel")
@@ -159,7 +137,8 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
     await asyncio.wait_for(cancelled_seen.wait(), timeout=5.0)
 
     # Downstream must not start after cancel
-    assert not await wait_node_running(inmemory_db, tid, "w2", timeout=1.0), "downstream should NOT start after cancel"
+    with pytest.raises(AssertionError):
+        await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
 
     spy_task.cancel()
     try:
@@ -280,8 +259,10 @@ async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inm
     # Fire cancel immediately (do not await)
     asyncio.create_task(cancel_method(tid, reason="cancel-before-start"))
 
-    assert not await wait_node_running(inmemory_db, tid, "w1", timeout=1.0)
-    assert not await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
+    with pytest.raises(AssertionError):
+        await wait_node_running(inmemory_db, tid, "w1", timeout=1.0)
+    with pytest.raises(AssertionError):
+        await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
 
 
 @pytest.mark.asyncio
