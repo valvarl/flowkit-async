@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
-from flowkit.worker.handlers.base import RoleHandler, Batch, BatchResult, FinalizeResult  # type: ignore
-
+from flowkit.worker.handlers.base import Batch, BatchResult, FinalizeResult, RoleHandler  # type: ignore
 from tests.helpers.util import dbg, stable_hash
-
 
 # ───────────────────────── Index-like (graph fan-in/out) ─────────────────────────
 
+
 class IndexerHandler(RoleHandler):
     """Synthetic indexer that emits SKUs in batches and reports per-batch counts."""
+
     role = "indexer"
 
     def __init__(self, *, db: Any) -> None:
         self.db = db
-        self._task_id: Optional[str] = None
-        self._epoch: Optional[int] = None
+        self._task_id: str | None = None
+        self._epoch: int | None = None
 
     async def init(self, cfg):
         self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
@@ -30,7 +30,7 @@ class IndexerHandler(RoleHandler):
         bs = int(loaded.get("batch_size", 5))
         skus = [f"sku-{i}" for i in range(total)]
         for idx in range(0, total, bs):
-            chunk = skus[idx: idx + bs]
+            chunk = skus[idx : idx + bs]
             uid = stable_hash({"node": "w1", "idx": idx // bs})
             dbg("HNDL.indexer.yield", task_id=self._task_id, epoch=self._epoch, batch_uid=uid, count=len(chunk))
             yield Batch(batch_uid=uid, payload={"skus": chunk})
@@ -38,6 +38,7 @@ class IndexerHandler(RoleHandler):
     async def process_batch(self, batch, ctx):
         # configurable think-time via env to keep old behavior compatible
         import os
+
         delay = float(os.getenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.25"))
         if delay > 0:
             await asyncio.sleep(delay)
@@ -52,10 +53,10 @@ class _PullFromArtifactsMixin:
     """
 
     async def _emit_from_artifacts(
-        self, *, from_nodes: List[str], size: int, meta_key: str, poll: float, role_tag: str
+        self, *, from_nodes: list[str], size: int, meta_key: str, poll: float, role_tag: str
     ):
         if not hasattr(self, "_emitted"):
-            self._emitted: Dict[tuple, set] = {}
+            self._emitted: dict[tuple, set] = {}
         completed_nodes: set[str] = set()
 
         while True:
@@ -71,7 +72,7 @@ class _PullFromArtifactsMixin:
                     continue
 
                 parent_uid = doc.get("batch_uid")
-                meta = (doc.get("meta") or {})
+                meta = doc.get("meta") or {}
                 items = list(meta.get(meta_key) or [])
 
                 if doc.get("status") == "complete":
@@ -85,11 +86,18 @@ class _PullFromArtifactsMixin:
                 if new_items:
                     idx_local = 0
                     for i in range(0, len(new_items), size):
-                        chunk = new_items[i: i + size]
+                        chunk = new_items[i : i + size]
                         chunk_uid = stable_hash({"src": node_id, "parent": parent_uid, "idx": idx_local})
-                        dbg("HNDL.emit",
-                            role=role_tag, task_id=self._task_id, epoch=self._epoch,
-                            src=node_id, parent_uid=parent_uid, batch_uid=chunk_uid, chunk=len(chunk))
+                        dbg(
+                            "HNDL.emit",
+                            role=role_tag,
+                            task_id=self._task_id,
+                            epoch=self._epoch,
+                            src=node_id,
+                            parent_uid=parent_uid,
+                            batch_uid=chunk_uid,
+                            chunk=len(chunk),
+                        )
                         yield Batch(
                             batch_uid=chunk_uid,
                             payload={"items": chunk, "parent": {"batch_uid": parent_uid, "list_key": meta_key}},
@@ -110,6 +118,7 @@ class _PullFromArtifactsMixin:
 
 class EnricherHandler(_PullFromArtifactsMixin, RoleHandler):
     """Takes items from artifacts, tags them with `enriched=True`, tracks counts."""
+
     role = "enricher"
 
     def __init__(self, *, db: Any) -> None:
@@ -145,6 +154,7 @@ class EnricherHandler(_PullFromArtifactsMixin, RoleHandler):
 
 class OCRHandler(_PullFromArtifactsMixin, RoleHandler):
     """Turns items into `ocr_ok=True` rows; mirrors Enricher flow."""
+
     role = "ocr"
 
     def __init__(self, *, db: Any) -> None:
@@ -180,6 +190,7 @@ class OCRHandler(_PullFromArtifactsMixin, RoleHandler):
 
 class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
     """Counts/sinks items from upstream; used as final consumer in tests."""
+
     role = "analyzer"
 
     def __init__(self, *, db: Any) -> None:
@@ -214,11 +225,13 @@ class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
 
 # ───────────────────────── Source-like (status/lease/heartbeat tests) ─────────────────────────
 
+
 class _BaseSource(RoleHandler):
     """
     A simple source that generates batches of integer items.
     Used in reliability/cancellation/heartbeat tests.
     """
+
     role = "source"
 
     def __init__(self, *, db: Any, total: int = 1, batch: int = 1, delay: float = 0.0) -> None:
@@ -251,6 +264,7 @@ class _BaseSource(RoleHandler):
 
 class _CancelableSource(_BaseSource):
     """Source whose processing loop cooperatively respects cancellation via ctx."""
+
     async def process_batch(self, batch, ctx):
         d = float(batch.payload.get("delay", self.delay) or 0.3)
         # sleep in small steps to give the runtime a chance to cancel
@@ -266,6 +280,7 @@ class _CancelableSource(_BaseSource):
 
 class _FlakyOnce(RoleHandler):
     """Fails the first batch (transient), then succeeds on retry."""
+
     role = "flaky"
 
     def __init__(self, *, db: Any) -> None:
@@ -287,6 +302,7 @@ class _FlakyOnce(RoleHandler):
 
 class _PermanentFail(RoleHandler):
     """Always fails permanently; used to test cascade cancel."""
+
     role = "a"
 
     def __init__(self, *, db: Any) -> None:
@@ -309,6 +325,7 @@ class _PermanentFail(RoleHandler):
 
 class _Noop(RoleHandler):
     """Role that produces a single no-op batch and succeeds."""
+
     def __init__(self, *, db: Any, role: str) -> None:
         self.db = db
         self.role = role  # worker uses handler.role for topic naming
@@ -326,6 +343,7 @@ class _Noop(RoleHandler):
 
 class _Sleepy(RoleHandler):
     """Emits N batches and sleeps in process to simulate long CPU/IO work."""
+
     def __init__(self, *, db: Any, role: str, batches: int = 1, sleep_s: float = 1.2) -> None:
         self.db = db
         self.role = role
@@ -349,6 +367,7 @@ class _Sleepy(RoleHandler):
 
 class _NoopQueryOnly(RoleHandler):
     """One-shot batch, mainly for query-path sanity tests."""
+
     def __init__(self, *, db: Any, role: str) -> None:
         self.db = db
         self.role = role
@@ -365,35 +384,54 @@ class _NoopQueryOnly(RoleHandler):
 
 # ───────────────────────── Public builders (factory-friendly) ─────────────────────────
 
+
 # graph/pipeline handlers
-def build_indexer_handler(*, db: Any) -> RoleHandler: return IndexerHandler(db=db)
-def build_enricher_handler(*, db: Any) -> RoleHandler: return EnricherHandler(db=db)
-def build_ocr_handler(*, db: Any) -> RoleHandler:     return OCRHandler(db=db)
-def build_analyzer_handler(*, db: Any) -> RoleHandler: return AnalyzerHandler(db=db)
+def build_indexer_handler(*, db: Any) -> RoleHandler:
+    return IndexerHandler(db=db)
+
+
+def build_enricher_handler(*, db: Any) -> RoleHandler:
+    return EnricherHandler(db=db)
+
+
+def build_ocr_handler(*, db: Any) -> RoleHandler:
+    return OCRHandler(db=db)
+
+
+def build_analyzer_handler(*, db: Any) -> RoleHandler:
+    return AnalyzerHandler(db=db)
+
 
 # source/reliability handlers
 def build_counting_source_handler(*, db: Any, total: int, batch: int) -> RoleHandler:
     return _BaseSource(db=db, total=total, batch=batch, delay=0.0)
 
+
 def build_slow_source_handler(*, db: Any, total: int, batch: int, delay: float) -> RoleHandler:
     return _BaseSource(db=db, total=total, batch=batch, delay=delay)
+
 
 def build_cancelable_source_handler(*, db: Any, total: int, batch: int, delay: float) -> RoleHandler:
     return _CancelableSource(db=db, total=total, batch=batch, delay=delay)
 
+
 def build_flaky_once_handler(*, db: Any) -> RoleHandler:
     return _FlakyOnce(db=db)
+
 
 def build_permanent_fail_handler(*, db: Any, role: str = "a") -> RoleHandler:
     h = _PermanentFail(db=db)
     h.role = role  # allow "a"/custom role for cascade graphs
     return h
 
+
 def build_noop_handler(*, db: Any, role: str) -> RoleHandler:
     return _Noop(db=db, role=role)
 
+
 def build_sleepy_handler(*, db: Any, role: str, batches: int = 1, sleep_s: float = 1.2) -> RoleHandler:
     return _Sleepy(db=db, role=role, batches=batches, sleep_s=sleep_s)
+
 
 def build_noop_query_only_role(*, db: Any, role: str) -> RoleHandler:
     return _NoopQueryOnly(db=db, role=role)

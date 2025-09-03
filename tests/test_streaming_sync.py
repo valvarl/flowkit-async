@@ -13,18 +13,20 @@ All tests rely on in-memory Kafka and DB, configured via fixtures from `conftest
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pytest
-import pytest_asyncio
 
 from tests.helpers import BROKER, AIOKafkaProducerMock, dbg
-from tests.helpers.graph import (make_graph, node_by_id, prime_graph,
-                                 wait_node_not_running_for, wait_node_running,
-                                 wait_task_finished)
-from tests.helpers.handlers import (build_analyzer_handler,
-                                    build_indexer_handler)
+from tests.helpers.graph import (
+    make_graph,
+    node_by_id,
+    prime_graph,
+    wait_node_not_running_for,
+    wait_node_running,
+    wait_task_finished,
+)
+from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Limit worker types for this module (see conftest._worker_types_from_marker).
 pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
@@ -32,13 +34,14 @@ pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
 
 # ───────────────────────── Small helpers ─────────────────────────
 
-def _node_status(doc: Dict[str, Any], node_id: str) -> Any:
+
+def _node_status(doc: dict[str, Any], node_id: str) -> Any:
     """Get node status by node_id from a task doc."""
     n = node_by_id(doc, node_id)
     return n.get("status") if n else None
 
 
-def _make_indexer(node_id: str, total: int, batch: int) -> Dict[str, Any]:
+def _make_indexer(node_id: str, total: int, batch: int) -> dict[str, Any]:
     """
     Build a simple indexer node:
       - emits `total` items in batches of `batch`.
@@ -55,10 +58,10 @@ def _make_indexer(node_id: str, total: int, batch: int) -> Dict[str, Any]:
     }
 
 
-def _get_count(doc: Dict[str, Any], node_id: str) -> int:
+def _get_count(doc: dict[str, Any], node_id: str) -> int:
     """Return the aggregated 'count' metric from a node's stats (0 if absent)."""
     node = node_by_id(doc or {}, node_id)
-    return int(((node.get("stats") or {}).get("count") or 0))
+    return int((node.get("stats") or {}).get("count") or 0)
 
 
 # ───────────────────────── Tests ─────────────────────────
@@ -86,7 +89,10 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
         "fan_in": "all",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 30}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 30},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
@@ -131,7 +137,9 @@ async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db
         "type": "analyzer",
         "depends_on": ["u"],
         "fan_in": "all",
-        "io": {"input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 30}}},
+        "io": {
+            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 30}}
+        },
         "status": None,
         "attempt_epoch": 0,
     }
@@ -169,8 +177,8 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
     )
 
     # Three sources with several batches each.
-    u1 = _make_indexer("u1", total=9, batch=3)   # 3 batches
-    u2 = _make_indexer("u2", total=8, batch=4)   # 2 batches
+    u1 = _make_indexer("u1", total=9, batch=3)  # 3 batches
+    u2 = _make_indexer("u2", total=8, batch=4)  # 2 batches
     u3 = _make_indexer("u3", total=12, batch=3)  # 4 batches
 
     d = {
@@ -180,7 +188,10 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
         "fan_in": "any",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 25}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 25},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
@@ -235,7 +246,10 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
         "fan_in": "all",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 25}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
@@ -277,7 +291,10 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
         "fan_in": "any",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 20}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 20},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
@@ -315,7 +332,10 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
         "fan_in": "all",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 25}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
@@ -352,7 +372,10 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
             "fan_in": "all",
             "io": {
                 "start_when": "first_batch",
-                "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 25}},
+                "input_inline": {
+                    "input_adapter": "pull.from_artifacts",
+                    "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+                },
             },
             "status": None,
             "attempt_epoch": 0,
@@ -372,7 +395,9 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
 
 
 @pytest.mark.asyncio
-async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
+async def test_metrics_idempotent_on_duplicate_status_events(
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+):
     """
     Duplicate STATUS events (BATCH_OK / TASK_DONE) must not double-increment aggregated metrics.
 
@@ -394,7 +419,7 @@ async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, in
         await orig_send(self, topic, value, key)
         # Then, if it's a STATUS event, produce a duplicate of the same envelope.
         if topic.startswith("status.") and (value or {}).get("msg_type") == "event":
-            kind = ((value.get("payload") or {}).get("kind") or "")
+            kind = (value.get("payload") or {}).get("kind") or ""
             if kind in ("BATCH_OK", "TASK_DONE"):
                 await BROKER.produce(topic, value)
 
@@ -410,7 +435,10 @@ async def test_metrics_idempotent_on_duplicate_status_events(env_and_imports, in
         "fan_in": "all",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 25}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+            },
         },
         "status": None,
         "attempt_epoch": 0,

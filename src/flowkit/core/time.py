@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 
@@ -14,8 +15,9 @@ class Clock(Protocol):
 
 class SystemClock:
     """Default production/test clock."""
+
     def now_dt(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def now_ms(self) -> int:
         # wall clock epoch ms (persistable)
@@ -35,12 +37,13 @@ class ManualClock(SystemClock):
     - Wall time is advanced manually (affects persistence fields).
     - Monotonic time mirrors wall unless overridden.
     """
+
     def __init__(self, start_ms: int = 0) -> None:
         self._wall = start_ms
         self._mono = start_ms
 
     def now_dt(self) -> datetime:
-        return datetime.fromtimestamp(self._wall / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(self._wall / 1000.0, tz=UTC)
 
     def now_ms(self) -> int:
         return self._wall

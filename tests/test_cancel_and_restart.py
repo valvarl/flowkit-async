@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Dict
 
 import pytest
 import pytest_asyncio
 
-from tests.helpers import AIOKafkaConsumerMock, BROKER, dbg
-from tests.helpers.graph import prime_graph, wait_task_finished, wait_node_running
+from tests.helpers import BROKER, AIOKafkaConsumerMock
+from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
 from tests.helpers.handlers import (
     build_analyzer_handler,
     build_flaky_once_handler,
@@ -21,7 +20,8 @@ pytestmark = pytest.mark.worker_types("indexer,analyzer,flaky")
 
 # ───────────────────────── Small helpers ─────────────────────────
 
-def graph_cancel_flow() -> Dict:
+
+def graph_cancel_flow() -> dict:
     """
     w1=indexer -> w2=analyzer; analyzer starts on first upstream batch (pull.from_artifacts).
     Equivalent to simple producer→sink.
@@ -55,7 +55,7 @@ def graph_cancel_flow() -> Dict:
     }
 
 
-def graph_restart_flaky() -> Dict:
+def graph_restart_flaky() -> dict:
     """Single 'flaky' node with retries: first attempt fails (transient), then succeeds."""
     return {
         "schema_version": "1.0",
@@ -75,6 +75,7 @@ def graph_restart_flaky() -> Dict:
 
 # ───────────────────────── Fixtures ─────────────────────────
 
+
 @pytest_asyncio.fixture
 async def workers(worker_factory, inmemory_db):
     """
@@ -93,6 +94,7 @@ async def workers(worker_factory, inmemory_db):
 
 
 # ───────────────────────── Tests ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, coord, workers):
@@ -131,10 +133,16 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
     spy_task = asyncio.create_task(watch_cancel())
 
     # Cancel the whole task (in background to avoid blocking on grace windows)
-    asyncio.create_task(cancel_method(tid, reason="test-cascade"))
+    cancel_bg = asyncio.create_task(cancel_method(tid, reason="test-cascade"))
 
     # Wait for CANCELLED from w1
     await asyncio.wait_for(cancelled_seen.wait(), timeout=5.0)
+
+    # Ensure background cancel task finished (avoid leaked task / satisfy RUF006)
+    try:
+        await asyncio.wait_for(cancel_bg, timeout=5.0)
+    except Exception:
+        pass
 
     # Downstream must not start after cancel
     with pytest.raises(AssertionError):
@@ -257,12 +265,18 @@ async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inm
     tid = await coord.create_task(params={}, graph=g)
 
     # Fire cancel immediately (do not await)
-    asyncio.create_task(cancel_method(tid, reason="cancel-before-start"))
+    cancel_bg = asyncio.create_task(cancel_method(tid, reason="cancel-before-start"))
 
     with pytest.raises(AssertionError):
         await wait_node_running(inmemory_db, tid, "w1", timeout=1.0)
     with pytest.raises(AssertionError):
         await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
+
+    # Make sure background cancel completed (avoids dangling task)
+    try:
+        await asyncio.wait_for(cancel_bg, timeout=5.0)
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio
@@ -292,6 +306,7 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
     spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.defer_cancel")
     await spy.start()
 
+    cancel_bg_task = None
     cancel_triggered = asyncio.Event()
     higher_epoch_accepted = asyncio.Event()
 
@@ -305,7 +320,8 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
             kind = (env.get("payload") or {}).get("kind")
 
             if kind == "TASK_FAILED" and epoch == 1:
-                asyncio.create_task(cancel_method(tid, reason="cancel-on-deferred"))
+                nonlocal cancel_bg_task
+                cancel_bg_task = asyncio.create_task(cancel_method(tid, reason="cancel-on-deferred"))
                 cancel_triggered.set()
                 return
 
@@ -326,6 +342,13 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
     except Exception:
         pass
     await spy.stop()
+
+    # If cancel was issued, ensure it completed
+    if cancel_bg_task is not None:
+        try:
+            await asyncio.wait_for(cancel_bg_task, timeout=5.0)
+        except Exception:
+            pass
 
 
 @pytest.mark.asyncio

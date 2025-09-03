@@ -16,8 +16,8 @@ import pytest
 import pytest_asyncio
 
 from tests.helpers import dbg
-from tests.helpers.graph import prime_graph, wait_task_finished, wait_node_running
-from tests.helpers.handlers import build_indexer_handler, build_analyzer_handler
+from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
+from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Only the roles required by this module
 pytestmark = pytest.mark.worker_types("indexer,analyzer")
@@ -35,7 +35,7 @@ async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory)
     Handlers come from conftest.handlers (already DB-injected).
     """
     await worker_factory(
-        ("indexer",  build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
     # worker_factory will auto-stop workers on teardown
@@ -43,6 +43,7 @@ async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory)
 
 
 # ───────────────────────── Helpers (local builders only) ─────────────────────────
+
 
 def _make_indexer_node(node_id: str, total: int, batch: int):
     """Synthetic upstream indexer node with inline input and no deps."""
@@ -59,6 +60,7 @@ def _make_indexer_node(node_id: str, total: int, batch: int):
 
 # ───────────────────────── Tests ─────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
     """
@@ -68,8 +70,8 @@ async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, worke
     """
     cd, _ = env_and_imports
 
-    u1 = _make_indexer_node("u1", total=4,  batch=4)
-    u2 = _make_indexer_node("u2", total=8,  batch=4)
+    u1 = _make_indexer_node("u1", total=4, batch=4)
+    u2 = _make_indexer_node("u2", total=8, batch=4)
     u3 = _make_indexer_node("u3", total=12, batch=6)
 
     d_any = {
@@ -79,16 +81,20 @@ async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, worke
         "fan_in": "any",
         "io": {
             "start_when": "first_batch",
-            "input_inline": {"input_adapter": "pull.from_artifacts",
-                             "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 40}},
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 40},
+            },
         },
         "status": None,
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0",
-             "nodes": [u1, u2, u3, d_any],
-             "edges": [["u1", "d_any"], ["u2", "d_any"], ["u3", "d_any"]]}
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [u1, u2, u3, d_any],
+        "edges": [["u1", "d_any"], ["u2", "d_any"], ["u3", "d_any"]],
+    }
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -119,7 +125,7 @@ async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, 
     """
     cd, _ = env_and_imports
 
-    a = _make_indexer_node("a", total=6,  batch=3)
+    a = _make_indexer_node("a", total=6, batch=3)
     b = _make_indexer_node("b", total=10, batch=5)
 
     d_all = {
@@ -127,15 +133,17 @@ async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, 
         "type": "analyzer",
         "depends_on": ["a", "b"],
         "fan_in": "all",
-        "io": {"input_inline": {"input_adapter": "pull.from_artifacts",
-                                "input_args": {"from_nodes": ["a", "b"], "poll_ms": 40}}},
+        "io": {
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["a", "b"], "poll_ms": 40},
+            }
+        },
         "status": None,
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0",
-             "nodes": [a, b, d_all],
-             "edges": [["a", "d_all"], ["b", "d_all"]]}
+    graph = {"schema_version": "1.0", "nodes": [a, b, d_all], "edges": [["a", "d_all"], ["b", "d_all"]]}
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -173,16 +181,22 @@ async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexe
         "type": "analyzer",
         "depends_on": ["p1", "p2", "p3"],
         "fan_in": "count:2",
-        "io": {"start_when": "first_batch",
-               "input_inline": {"input_adapter": "pull.from_artifacts",
-                                "input_args": {"from_nodes": ["p1", "p2", "p3"], "poll_ms": 40}}},
+        "io": {
+            "start_when": "first_batch",
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["p1", "p2", "p3"], "poll_ms": 40},
+            },
+        },
         "status": None,
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0",
-             "nodes": [p1, p2, p3, d_cnt],
-             "edges": [["p1", "d_cnt"], ["p2", "d_cnt"], ["p3", "d_cnt"]]}
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [p1, p2, p3, d_cnt],
+        "edges": [["p1", "d_cnt"], ["p2", "d_cnt"], ["p3", "d_cnt"]],
+    }
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -215,8 +229,12 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
         "type": "analyzer",
         "depends_on": ["src"],
         "fan_in": "all",
-        "io": {"input_inline": {"input_adapter": "pull.from_artifacts",
-                                "input_args": {"from_nodes": ["src"], "poll_ms": 40}}},
+        "io": {
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["src"], "poll_ms": 40},
+            }
+        },
         "status": None,
         "attempt_epoch": 0,
     }
@@ -225,8 +243,12 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
         "type": "analyzer",
         "depends_on": ["src"],
         "fan_in": "all",
-        "io": {"input_inline": {"input_adapter": "pull.from_artifacts",
-                                "input_args": {"from_nodes": ["src"], "poll_ms": 40}}},
+        "io": {
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["src"], "poll_ms": 40},
+            }
+        },
         "status": None,
         "attempt_epoch": 0,
     }
@@ -248,8 +270,10 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
     dbg("EDGES_ROUTES.FINAL.STATUS", statuses=st)
 
     assert st["only_edges"] == cd.RunState.finished
-    assert st["should_not_run"] in (None, cd.RunState.queued), \
-        "routing.on_success must not trigger when explicit edges exist"
+    assert st["should_not_run"] in (
+        None,
+        cd.RunState.queued,
+    ), "routing.on_success must not trigger when explicit edges exist"
 
 
 @pytest.mark.asyncio
@@ -278,16 +302,22 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
         "type": "analyzer",
         "depends_on": ["merge"],
         "fan_in": "all",
-        "io": {"start_when": "first_batch",
-               "input_inline": {"input_adapter": "pull.from_artifacts",
-                                "input_args": {"from_nodes": ["merge"], "poll_ms": 40}}},
+        "io": {
+            "start_when": "first_batch",
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["merge"], "poll_ms": 40},
+            },
+        },
         "status": None,
         "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0",
-             "nodes": [u1, u2, merge, sink],
-             "edges": [["u1", "merge"], ["u2", "merge"], ["merge", "sink"]]}
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [u1, u2, merge, sink],
+        "edges": [["u1", "merge"], ["u2", "merge"], ["merge", "sink"]],
+    }
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
@@ -300,8 +330,6 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
     assert st["sink"] == cd.RunState.finished
 
     # Merge artifacts must exist and be complete.
-    cnt = await inmemory_db.artifacts.count_documents(
-        {"task_id": task_id, "node_id": "merge", "status": "complete"}
-    )
+    cnt = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "merge", "status": "complete"})
     dbg("MERGE.ART.COUNT", count=cnt)
     assert cnt >= 1

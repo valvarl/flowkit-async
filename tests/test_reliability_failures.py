@@ -11,10 +11,8 @@ Design:
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
 import pytest
-import pytest_asyncio
 
 from flowkit.protocol.messages import Envelope, EventKind, MsgType, Role
 from tests.helpers import (
@@ -23,6 +21,13 @@ from tests.helpers import (
     dbg,
     status_topic,
 )
+from tests.helpers.graph import (
+    make_graph,
+    node_by_id,
+    prime_graph,
+    wait_task_finished,
+    wait_task_status,
+)
 from tests.helpers.handlers import (
     build_cancelable_source_handler,
     build_counting_source_handler,
@@ -30,13 +35,6 @@ from tests.helpers.handlers import (
     build_noop_handler,
     build_permanent_fail_handler,
     build_slow_source_handler,
-)
-from tests.helpers.graph import (
-    prime_graph,
-    wait_task_finished,
-    wait_task_status,
-    node_by_id,
-    make_graph,
 )
 
 # Limit roles available in this module. conftest will pass these to CoordinatorConfig.
@@ -60,7 +58,7 @@ async def test_idempotent_metrics_on_duplicate_events(env_and_imports, inmemory_
     async def dup_status(self, topic, value, key=None):
         await orig_send(self, topic, value, key)
         if topic.startswith("status.") and (value or {}).get("msg_type") == "event":
-            kind = ((value.get("payload") or {}).get("kind") or "")
+            kind = (value.get("payload") or {}).get("kind") or ""
             if kind in ("BATCH_OK", "TASK_DONE"):
                 await BROKER.produce(topic, value)
 
@@ -201,7 +199,9 @@ async def test_status_fencing_ignores_stale_epoch(env_and_imports, inmemory_db, 
 
 
 @pytest.mark.asyncio
-async def test_coordinator_restart_adopts_inflight_without_new_epoch(env_and_imports, inmemory_db, coord_cfg, worker_cfg, worker_factory):
+async def test_coordinator_restart_adopts_inflight_without_new_epoch(
+    env_and_imports, inmemory_db, coord_cfg, worker_cfg, worker_factory
+):
     """
     When the coordinator restarts, it should adopt in-flight work without incrementing
     the worker's attempt_epoch unnecessarily (i.e., source keeps epoch=1).
@@ -214,7 +214,7 @@ async def test_coordinator_restart_adopts_inflight_without_new_epoch(env_and_imp
     coord1 = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
     await coord1.start()
 
-    task_id: Optional[str] = None
+    task_id: str | None = None
     coord2 = None
     try:
         graph = make_graph(
@@ -303,21 +303,18 @@ async def test_heartbeat_updates_lease_deadline(env_and_imports, inmemory_db, co
     task_id = await coord.create_task(params={}, graph=graph)
 
     # Capture first observed lease deadline.
-    first: Optional[int] = None
+    first: int | None = None
     for _ in range(120):
         t = await inmemory_db.tasks.find_one({"id": task_id})
         if t:
-            lease = (node_by_id(t, "s").get("lease") or {})
+            lease = node_by_id(t, "s").get("lease") or {}
             if lease.get("deadline_ts_ms"):
                 first = int(lease["deadline_ts_ms"])
                 break
         await asyncio.sleep(0.03)
     assert first is not None
 
-    # Wait and see the lease deadline move forward.
-    import time as _time
-
-    _time.sleep(1.1)
+    await asyncio.sleep(1.1)
 
     second = first
     for _ in range(40):

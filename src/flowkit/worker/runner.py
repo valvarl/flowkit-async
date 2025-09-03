@@ -3,26 +3,33 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import os
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from ..core.config import WorkerConfig
 from ..core.time import Clock, SystemClock
-from ..core.utils import stable_hash, dumps, loads
+from ..core.utils import dumps, loads, stable_hash
 from ..protocol.messages import (
-    Envelope, MsgType, Role, CommandKind, EventKind, QueryKind, ReplyKind,
-    CmdTaskStart, CmdTaskCancel, SigCancel,
+    CmdTaskCancel,
+    CmdTaskStart,
+    CommandKind,
+    Envelope,
+    EventKind,
+    MsgType,
+    QueryKind,
+    ReplyKind,
+    Role,
+    SigCancel,
 )
-from .state import LocalState, ActiveRun
 from .artifacts import ArtifactsWriter
 from .context import RunContext
-from .handlers.base import RoleHandler, Batch, BatchResult, FinalizeResult
+from .handlers.base import Batch, BatchResult, RoleHandler
 from .handlers.echo import EchoHandler
 from .input.pull_adapters import build_input_adapters
+from .state import ActiveRun, LocalState
 
 
 def _json_log(clock: Clock, **kv: Any) -> None:
@@ -38,14 +45,15 @@ class Worker:
     - Control-plane CANCEL via signals topic
     - Local JSON state for resume hints
     """
+
     def __init__(
         self,
         *,
         db,
-        cfg: Optional[WorkerConfig] = None,
+        cfg: WorkerConfig | None = None,
         clock: Clock | None = None,
-        roles: Optional[List[str]] = None,
-        handlers: Optional[Dict[str, RoleHandler]] = None,
+        roles: list[str] | None = None,
+        handlers: dict[str, RoleHandler] | None = None,
     ) -> None:
         self.db = db
         self.cfg = copy.deepcopy(cfg) if cfg is not None else WorkerConfig.load()
@@ -61,25 +69,25 @@ class Worker:
         self.input_adapters = build_input_adapters(db=db, clock=self.clock, cfg=self.cfg)
 
         # handlers registry (user injects custom handlers; Echo kept as example)
-        self.handlers: Dict[str, RoleHandler] = handlers or {}
+        self.handlers: dict[str, RoleHandler] = handlers or {}
         if "echo" in (self.cfg.roles or []):
             self.handlers.setdefault("echo", EchoHandler())
 
         # Kafka
-        self._producer: Optional[AIOKafkaProducer] = None
-        self._cmd_consumers: Dict[str, AIOKafkaConsumer] = {}
-        self._query_consumer: Optional[AIOKafkaConsumer] = None
-        self._signals_consumer: Optional[AIOKafkaConsumer] = None
+        self._producer: AIOKafkaProducer | None = None
+        self._cmd_consumers: dict[str, AIOKafkaConsumer] = {}
+        self._query_consumer: AIOKafkaConsumer | None = None
+        self._signals_consumer: AIOKafkaConsumer | None = None
 
         # run-state
         self._busy = False
         self._busy_lock = asyncio.Lock()
         self._cancel_flag = asyncio.Event()
-        self._cancel_meta: Dict[str, Any] = {"reason": None, "deadline_ts_ms": None}
+        self._cancel_meta: dict[str, Any] = {"reason": None, "deadline_ts_ms": None}
         self._stopping = False
 
         self.state = LocalState(self.cfg, self.clock)
-        self.active: Optional[ActiveRun] = self.state.read_active()
+        self.active: ActiveRun | None = self.state.read_active()
 
         # dedup of command envelopes
         self._dedup: OrderedDict[str, int] = OrderedDict()
@@ -100,11 +108,17 @@ class Worker:
             self.active = None
             await self.state.write_active(None)
 
-        await self._send_announce(EventKind.WORKER_ONLINE, extra={
-            "worker_id": self.worker_id, "type": ",".join(self.cfg.roles), "capabilities": {"roles": self.cfg.roles},
-            "version": self.worker_version, "capacity": {"tasks": 1},
-            "resume": self.active.__dict__ if self.active else None
-        })
+        await self._send_announce(
+            EventKind.WORKER_ONLINE,
+            extra={
+                "worker_id": self.worker_id,
+                "type": ",".join(self.cfg.roles),
+                "capabilities": {"roles": self.cfg.roles},
+                "version": self.worker_version,
+                "capacity": {"tasks": 1},
+                "resume": self.active.__dict__ if self.active else None,
+            },
+        )
 
         # command consumers per role
         for role in self.cfg.roles:
@@ -128,7 +142,7 @@ class Worker:
             value_deserializer=loads,
             enable_auto_commit=False,
             auto_offset_reset="latest",
-            group_id=f"workers.query.v1",
+            group_id="workers.query.v1",
         )
         await self._query_consumer.start()
         self._spawn(self._query_loop(self._query_consumer))
@@ -191,10 +205,10 @@ class Worker:
     async def _send_status(self, role: str, env: Envelope) -> None:
         assert self._producer is not None
         topic = self.cfg.topic_status(role)
-        key = f"{env.task_id}:{env.node_id}".encode("utf-8")
+        key = f"{env.task_id}:{env.node_id}".encode()
         await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)
 
-    async def _send_announce(self, kind: EventKind, extra: Dict[str, Any]) -> None:
+    async def _send_announce(self, kind: EventKind, extra: dict[str, Any]) -> None:
         assert self._producer is not None
         payload = {"kind": kind, **extra}
         now_ms = self.clock.now_ms()
@@ -249,11 +263,14 @@ class Worker:
                 msg = await consumer.getone()
                 env = Envelope.model_validate(msg.value)
                 if await self._seen_or_add(env.dedup_id):
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
                 if env.msg_type != MsgType.cmd or env.role != Role.coordinator:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
                 if env.step_type != role:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
 
                 _k = env.payload.get("cmd")
                 try:
@@ -290,19 +307,33 @@ class Worker:
             self._cancel_meta["deadline_ts_ms"] = None
 
             self.active = ActiveRun(
-                task_id=env.task_id, node_id=env.node_id, step_type=role,
-                attempt_epoch=env.attempt_epoch, lease_id=lease_id, cancel_token=cmd.cancel_token,
-                started_at_ms=self.clock.now_ms(), state="running", checkpoint={}
+                task_id=env.task_id,
+                node_id=env.node_id,
+                step_type=role,
+                attempt_epoch=env.attempt_epoch,
+                lease_id=lease_id,
+                cancel_token=cmd.cancel_token,
+                started_at_ms=self.clock.now_ms(),
+                state="running",
+                checkpoint={},
             )
             await self.state.write_active(self.active)
 
             acc_env = Envelope(
-                msg_type=MsgType.event, role=Role.worker,
+                msg_type=MsgType.event,
+                role=Role.worker,
                 dedup_id=stable_hash({"acc": env.task_id, "n": env.node_id, "e": env.attempt_epoch, "lease": lease_id}),
-                task_id=env.task_id, node_id=env.node_id, step_type=role, attempt_epoch=env.attempt_epoch,
+                task_id=env.task_id,
+                node_id=env.node_id,
+                step_type=role,
+                attempt_epoch=env.attempt_epoch,
                 ts_ms=self.clock.now_ms(),
-                payload={"kind": EventKind.TASK_ACCEPTED, "worker_id": self.worker_id,
-                         "lease_id": lease_id, "lease_deadline_ts_ms": lease_deadline_ms}
+                payload={
+                    "kind": EventKind.TASK_ACCEPTED,
+                    "worker_id": self.worker_id,
+                    "lease_id": lease_id,
+                    "lease_deadline_ts_ms": lease_deadline_ms,
+                },
             )
             await self._send_status(role, acc_env)
 
@@ -314,8 +345,12 @@ class Worker:
 
     async def _handle_task_cancel(self, role: str, env: Envelope, consumer: AIOKafkaConsumer) -> None:
         _ = CmdTaskCancel.model_validate(env.payload)
-        if self.active and self.active.task_id == env.task_id and self.active.node_id == env.node_id \
-           and self.active.attempt_epoch == env.attempt_epoch:
+        if (
+            self.active
+            and self.active.task_id == env.task_id
+            and self.active.node_id == env.node_id
+            and self.active.attempt_epoch == env.attempt_epoch
+        ):
             self._cancel_meta["reason"] = self._cancel_meta.get("reason") or "coordinator_cmd"
             self._cancel_flag.set()
             self.active.state = "cancelling"
@@ -331,19 +366,24 @@ class Worker:
             await self._cleanup_after_run()
             return
 
-        ctx: Optional[RunContext] = None
+        ctx: RunContext | None = None
         try:
-            await handler.init({
-                "task_id": self.active.task_id,
-                "node_id": self.active.node_id,
-                "attempt_epoch": self.active.attempt_epoch,
-                "worker_id": self.worker_id,
-                "role": role,
-            })
+            await handler.init(
+                {
+                    "task_id": self.active.task_id,
+                    "node_id": self.active.node_id,
+                    "attempt_epoch": self.active.attempt_epoch,
+                    "worker_id": self.worker_id,
+                    "role": role,
+                }
+            )
             artifacts = ArtifactsWriter(
-                db=self.db, clock=self.clock,
-                task_id=self.active.task_id, node_id=self.active.node_id,
-                attempt_epoch=self.active.attempt_epoch, worker_id=self.worker_id
+                db=self.db,
+                clock=self.clock,
+                task_id=self.active.task_id,
+                node_id=self.active.node_id,
+                attempt_epoch=self.active.attempt_epoch,
+                worker_id=self.worker_id,
             )
             ctx = RunContext(
                 cancel_flag=self._cancel_flag,
@@ -360,21 +400,33 @@ class Worker:
 
             # Choose input adapter if requested
             adapter_name = None
-            adapter_args: Dict[str, Any] = {}
+            adapter_args: dict[str, Any] = {}
             if isinstance(loaded, dict):
-                inline = (loaded.get("input_inline") or {})
+                inline = loaded.get("input_inline") or {}
                 adapter_name = inline.get("input_adapter")
                 adapter_args = inline.get("input_args", {}) or {}
 
             if adapter_name and adapter_name in self.input_adapters:
-                from_nodes = adapter_args.get("from_nodes") or (adapter_args.get("from_node") and [adapter_args["from_node"]]) or []
+                from_nodes = (
+                    adapter_args.get("from_nodes")
+                    or (adapter_args.get("from_node") and [adapter_args["from_node"]])
+                    or []
+                )
                 adapter_kwargs = dict(adapter_args)
-                adapter_kwargs.pop("from_nodes", None); adapter_kwargs.pop("from_node", None)
+                adapter_kwargs.pop("from_nodes", None)
+                adapter_kwargs.pop("from_node", None)
                 adapter_kwargs.setdefault("poll_ms", self.cfg.pull_poll_ms_default)
                 adapter_kwargs.setdefault("eof_on_task_done", True)
                 adapter_kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
 
-                _json_log(self.clock, event="adapter_selected", node=self.active.node_id, adapter=adapter_name, from_nodes=from_nodes, kwargs=adapter_kwargs)
+                _json_log(
+                    self.clock,
+                    event="adapter_selected",
+                    node=self.active.node_id,
+                    adapter=adapter_name,
+                    from_nodes=from_nodes,
+                    kwargs=adapter_kwargs,
+                )
 
                 async def _iter_batches_adapter():
                     it = self.input_adapters[adapter_name](
@@ -387,7 +439,13 @@ class Worker:
                     async for b in it:
                         if isinstance(b.payload, dict):
                             _cnt = len(b.payload.get("items") or b.payload.get("skus") or [])
-                            _json_log(self.clock, event="adapter_batch", node=self.active.node_id, batch_uid=b.batch_uid, items=_cnt)
+                            _json_log(
+                                self.clock,
+                                event="adapter_batch",
+                                node=self.active.node_id,
+                                batch_uid=b.batch_uid,
+                                items=_cnt,
+                            )
                         yield b
 
                 batch_iter = _iter_batches_adapter()
@@ -419,19 +477,25 @@ class Worker:
                     await self._emit_batch_ok(role, start_env, batch, res, uid, override_artifacts_ref=artifacts_ref)
                     continue
 
-                await self._emit_batch_failed(role, start_env, batch, res, uid, override_artifacts_ref={"batch_uid": uid})
-                await self._emit_task_failed(role, start_env, res.reason_code or "error", bool(res.permanent), res.error)
+                await self._emit_batch_failed(
+                    role, start_env, batch, res, uid, override_artifacts_ref={"batch_uid": uid}
+                )
+                await self._emit_task_failed(
+                    role, start_env, res.reason_code or "error", bool(res.permanent), res.error
+                )
                 return
 
             fin = await handler.finalize(ctx)
             metrics = (fin.metrics if fin else {}) if fin else {}
-            ref = (fin.artifacts_ref if fin else None)
+            ref = fin.artifacts_ref if fin else None
             ref = await artifacts.mark_complete(metrics, ref)
             await self._emit_task_done(role, start_env, metrics, ref)
 
         except asyncio.CancelledError:
             if self._stopping:
-                _json_log(self.clock, event="shutdown_preserve_state", node=self.active.node_id if self.active else None)
+                _json_log(
+                    self.clock, event="shutdown_preserve_state", node=self.active.node_id if self.active else None
+                )
             else:
                 await self._emit_cancelled(role, start_env, "cancelled")
             return
@@ -464,12 +528,27 @@ class Worker:
             while self._busy and not self._stopping and self.active is not None:
                 lease_deadline_ms = self.clock.now_ms() + self.cfg.lease_ttl_ms
                 hb_env = Envelope(
-                    msg_type=MsgType.event, role=Role.worker,
-                    dedup_id=stable_hash({"hb": self.active.task_id, "n": self.active.node_id, "e": self.active.attempt_epoch, "t": int(self.clock.now_ms()/max(1,self.cfg.hb_interval_ms))}),
-                    task_id=self.active.task_id, node_id=self.active.node_id, step_type=role,
-                    attempt_epoch=self.active.attempt_epoch, ts_ms=self.clock.now_ms(),
-                    payload={"kind": EventKind.TASK_HEARTBEAT, "worker_id": self.worker_id,
-                             "lease_id": self.active.lease_id, "lease_deadline_ts_ms": lease_deadline_ms}
+                    msg_type=MsgType.event,
+                    role=Role.worker,
+                    dedup_id=stable_hash(
+                        {
+                            "hb": self.active.task_id,
+                            "n": self.active.node_id,
+                            "e": self.active.attempt_epoch,
+                            "t": int(self.clock.now_ms() / max(1, self.cfg.hb_interval_ms)),
+                        }
+                    ),
+                    task_id=self.active.task_id,
+                    node_id=self.active.node_id,
+                    step_type=role,
+                    attempt_epoch=self.active.attempt_epoch,
+                    ts_ms=self.clock.now_ms(),
+                    payload={
+                        "kind": EventKind.TASK_HEARTBEAT,
+                        "worker_id": self.worker_id,
+                        "lease_id": self.active.lease_id,
+                        "lease_deadline_ts_ms": lease_deadline_ms,
+                    },
                 )
                 await self._send_status(role, hb_env)
                 await self.clock.sleep_ms(self.cfg.hb_interval_ms)
@@ -478,64 +557,121 @@ class Worker:
 
     # ---------- Status emitters ----------
     async def _emit_batch_ok(
-        self, role: str, base: Envelope, batch: Batch, res: BatchResult, batch_uid: str,
-        override_artifacts_ref: Optional[Dict[str, Any]] = None
+        self,
+        role: str,
+        base: Envelope,
+        batch: Batch,
+        res: BatchResult,
+        batch_uid: str,
+        override_artifacts_ref: dict[str, Any] | None = None,
     ) -> None:
         artifacts_ref = override_artifacts_ref if override_artifacts_ref is not None else res.artifacts_ref
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
+            msg_type=MsgType.event,
+            role=Role.worker,
             dedup_id=stable_hash({"bok": base.task_id, "n": base.node_id, "e": base.attempt_epoch, "uid": batch_uid}),
-            task_id=base.task_id, node_id=base.node_id, step_type=role, attempt_epoch=base.attempt_epoch,
+            task_id=base.task_id,
+            node_id=base.node_id,
+            step_type=role,
+            attempt_epoch=base.attempt_epoch,
             ts_ms=self.clock.now_ms(),
-            payload={"kind": EventKind.BATCH_OK, "worker_id": self.worker_id, "batch_uid": batch_uid,
-                     "metrics": res.metrics or {}, "artifacts_ref": artifacts_ref}
+            payload={
+                "kind": EventKind.BATCH_OK,
+                "worker_id": self.worker_id,
+                "batch_uid": batch_uid,
+                "metrics": res.metrics or {},
+                "artifacts_ref": artifacts_ref,
+            },
         )
         await self._send_status(role, env)
 
     async def _emit_batch_failed(
-        self, role: str, base: Envelope, batch: Batch, res: BatchResult, batch_uid: str,
-        override_artifacts_ref: Optional[Dict[str, Any]] = None
+        self,
+        role: str,
+        base: Envelope,
+        batch: Batch,
+        res: BatchResult,
+        batch_uid: str,
+        override_artifacts_ref: dict[str, Any] | None = None,
     ) -> None:
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
+            msg_type=MsgType.event,
+            role=Role.worker,
             dedup_id=stable_hash({"bf": base.task_id, "n": base.node_id, "e": base.attempt_epoch, "uid": batch_uid}),
-            task_id=base.task_id, node_id=base.node_id, step_type=role, attempt_epoch=base.attempt_epoch,
+            task_id=base.task_id,
+            node_id=base.node_id,
+            step_type=role,
+            attempt_epoch=base.attempt_epoch,
             ts_ms=self.clock.now_ms(),
-            payload={"kind": EventKind.BATCH_FAILED, "worker_id": self.worker_id, "batch_uid": batch_uid,
-                     "reason_code": res.reason_code or "error", "permanent": bool(res.permanent),
-                     "error": res.error, "artifacts_ref": override_artifacts_ref}
+            payload={
+                "kind": EventKind.BATCH_FAILED,
+                "worker_id": self.worker_id,
+                "batch_uid": batch_uid,
+                "reason_code": res.reason_code or "error",
+                "permanent": bool(res.permanent),
+                "error": res.error,
+                "artifacts_ref": override_artifacts_ref,
+            },
         )
         await self._send_status(role, env)
 
-    async def _emit_task_done(self, role: str, base: Envelope, metrics: Dict[str, int], artifacts_ref: Optional[Dict[str, Any]]) -> None:
+    async def _emit_task_done(
+        self, role: str, base: Envelope, metrics: dict[str, int], artifacts_ref: dict[str, Any] | None
+    ) -> None:
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
+            msg_type=MsgType.event,
+            role=Role.worker,
             dedup_id=stable_hash({"td": base.task_id, "n": base.node_id, "e": base.attempt_epoch}),
-            task_id=base.task_id, node_id=base.node_id, step_type=role, attempt_epoch=base.attempt_epoch,
+            task_id=base.task_id,
+            node_id=base.node_id,
+            step_type=role,
+            attempt_epoch=base.attempt_epoch,
             ts_ms=self.clock.now_ms(),
-            payload={"kind": EventKind.TASK_DONE, "worker_id": self.worker_id,
-                     "metrics": metrics or {}, "artifacts_ref": artifacts_ref, "final_uid": "__final__"}
+            payload={
+                "kind": EventKind.TASK_DONE,
+                "worker_id": self.worker_id,
+                "metrics": metrics or {},
+                "artifacts_ref": artifacts_ref,
+                "final_uid": "__final__",
+            },
         )
         await self._send_status(role, env)
 
-    async def _emit_task_failed(self, role: str, base: Envelope, reason: str, permanent: bool, error: Optional[str]) -> None:
+    async def _emit_task_failed(
+        self, role: str, base: Envelope, reason: str, permanent: bool, error: str | None
+    ) -> None:
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
-            dedup_id=stable_hash({"tf": base.task_id, "n": base.node_id, "e": base.attempt_epoch, "r": reason, "p": permanent}),
-            task_id=base.task_id, node_id=base.node_id, step_type=role, attempt_epoch=base.attempt_epoch,
+            msg_type=MsgType.event,
+            role=Role.worker,
+            dedup_id=stable_hash(
+                {"tf": base.task_id, "n": base.node_id, "e": base.attempt_epoch, "r": reason, "p": permanent}
+            ),
+            task_id=base.task_id,
+            node_id=base.node_id,
+            step_type=role,
+            attempt_epoch=base.attempt_epoch,
             ts_ms=self.clock.now_ms(),
-            payload={"kind": EventKind.TASK_FAILED, "worker_id": self.worker_id, "reason_code": reason,
-                     "permanent": bool(permanent), "error": error}
+            payload={
+                "kind": EventKind.TASK_FAILED,
+                "worker_id": self.worker_id,
+                "reason_code": reason,
+                "permanent": bool(permanent),
+                "error": error,
+            },
         )
         await self._send_status(role, env)
 
     async def _emit_cancelled(self, role: str, base: Envelope, reason: str) -> None:
         env = Envelope(
-            msg_type=MsgType.event, role=Role.worker,
+            msg_type=MsgType.event,
+            role=Role.worker,
             dedup_id=stable_hash({"c": base.task_id, "n": base.node_id, "e": base.attempt_epoch}),
-            task_id=base.task_id, node_id=base.node_id, step_type=role, attempt_epoch=base.attempt_epoch,
+            task_id=base.task_id,
+            node_id=base.node_id,
+            step_type=role,
+            attempt_epoch=base.attempt_epoch,
             ts_ms=self.clock.now_ms(),
-            payload={"kind": EventKind.CANCELLED, "worker_id": self.worker_id, "reason": reason}
+            payload={"kind": EventKind.CANCELLED, "worker_id": self.worker_id, "reason": reason},
         )
         await self._send_status(role, env)
 
@@ -546,16 +682,19 @@ class Worker:
                 msg = await consumer.getone()
                 env = Envelope.model_validate(msg.value)
                 if env.msg_type != MsgType.query or env.role != Role.coordinator:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
                 try:
                     qkind = env.payload.get("query")
                     qkind = qkind if isinstance(qkind, QueryKind) else QueryKind(qkind)
                 except Exception:
                     qkind = None
                 if qkind != QueryKind.TASK_DISCOVER:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
                 if env.step_type not in self.cfg.roles:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
 
                 ar = self.active
                 if ar and ar.task_id == env.task_id and ar.node_id == env.node_id:
@@ -565,14 +704,20 @@ class Worker:
                         "worker_id": self.worker_id,
                         "run_state": run_state,
                         "attempt_epoch": ar.attempt_epoch,
-                        "lease": {"worker_id": self.worker_id, "lease_id": ar.lease_id, "deadline_ts_ms": self.clock.now_ms() + self.cfg.lease_ttl_ms},
+                        "lease": {
+                            "worker_id": self.worker_id,
+                            "lease_id": ar.lease_id,
+                            "deadline_ts_ms": self.clock.now_ms() + self.cfg.lease_ttl_ms,
+                        },
                         "progress": {},
-                        "artifacts": None
+                        "artifacts": None,
                     }
                 else:
                     complete = False
                     try:
-                        cnt = await self.db.artifacts.count_documents({"task_id": env.task_id, "node_id": env.node_id, "status": "complete"})
+                        cnt = await self.db.artifacts.count_documents(
+                            {"task_id": env.task_id, "node_id": env.node_id, "status": "complete"}
+                        )
                         complete = cnt > 0
                     except Exception:
                         pass
@@ -583,15 +728,22 @@ class Worker:
                         "attempt_epoch": 0,
                         "lease": None,
                         "progress": None,
-                        "artifacts": {"complete": complete} if complete else None
+                        "artifacts": {"complete": complete} if complete else None,
                     }
 
                 reply = Envelope(
-                    msg_type=MsgType.reply, role=Role.worker,
-                    dedup_id=stable_hash({"snap": env.task_id, "n": env.node_id, "e": env.attempt_epoch, "w": self.worker_id}),
-                    task_id=env.task_id, node_id=env.node_id, step_type=env.step_type,
-                    attempt_epoch=env.attempt_epoch, ts_ms=self.clock.now_ms(),
-                    payload=payload, corr_id=env.corr_id
+                    msg_type=MsgType.reply,
+                    role=Role.worker,
+                    dedup_id=stable_hash(
+                        {"snap": env.task_id, "n": env.node_id, "e": env.attempt_epoch, "w": self.worker_id}
+                    ),
+                    task_id=env.task_id,
+                    node_id=env.node_id,
+                    step_type=env.step_type,
+                    attempt_epoch=env.attempt_epoch,
+                    ts_ms=self.clock.now_ms(),
+                    payload=payload,
+                    corr_id=env.corr_id,
                 )
                 await self._send_reply(reply)
                 await consumer.commit()
@@ -602,10 +754,15 @@ class Worker:
         try:
             while not self._stopping:
                 await self.clock.sleep_ms(self.cfg.announce_interval_ms)
-                await self._send_announce(EventKind.WORKER_ONLINE, extra={
-                    "worker_id": self.worker_id, "type": ",".join(self.cfg.roles),
-                    "version": self.worker_version, "capacity": {"tasks": 1}
-                })
+                await self._send_announce(
+                    EventKind.WORKER_ONLINE,
+                    extra={
+                        "worker_id": self.worker_id,
+                        "type": ",".join(self.cfg.roles),
+                        "version": self.worker_version,
+                        "capacity": {"tasks": 1},
+                    },
+                )
         except asyncio.CancelledError:
             return
 
@@ -617,19 +774,23 @@ class Worker:
                 env = Envelope.model_validate(msg.value)
 
                 if env.target_worker_id and env.target_worker_id != self.worker_id:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
 
                 pay = env.payload or {}
                 if (pay.get("sig") or "").upper() != "CANCEL":
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
                 try:
                     sc = SigCancel.model_validate(pay)
                 except Exception:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
 
                 ar = self.active
                 if not ar:
-                    await consumer.commit(); continue
+                    await consumer.commit()
+                    continue
 
                 if ar.task_id == env.task_id and ar.node_id == env.node_id and ar.attempt_epoch == env.attempt_epoch:
                     self._cancel_meta["reason"] = sc.reason
@@ -652,10 +813,13 @@ class Worker:
                         if (doc.get("coordinator") or {}).get("cancelled") is True:
                             if not self._cancel_meta["reason"]:
                                 self._cancel_meta["reason"] = "db_flag"
-                            self._cancel_flag.set(); break
+                            self._cancel_flag.set()
+                            break
                         for n in (doc.get("graph", {}) or {}).get("nodes") or []:
                             if n.get("node_id") == ar.node_id:
-                                if (n.get("coordinator") or {}).get("cancelled") is True or n.get("status") == "cancelling":
+                                if (n.get("coordinator") or {}).get("cancelled") is True or n.get(
+                                    "status"
+                                ) == "cancelling":
                                     if not self._cancel_meta["reason"]:
                                         self._cancel_meta["reason"] = "db_flag"
                                     self._cancel_flag.set()
@@ -672,11 +836,14 @@ class Worker:
             await self.db.artifacts.create_index([("task_id", 1), ("node_id", 1)], name="ix_artifacts_task_node")
             await self.db.artifacts.create_index(
                 [("task_id", 1), ("node_id", 1), ("batch_uid", 1)],
-                unique=True, sparse=True, name="uniq_artifact_batch_uid"
+                unique=True,
+                sparse=True,
+                name="uniq_artifact_batch_uid",
             )
             await self.db.stream_progress.create_index(
                 [("task_id", 1), ("consumer_node", 1), ("from_node", 1), ("batch_uid", 1)],
-                unique=True, name="uniq_stream_claim_batch"
+                unique=True,
+                name="uniq_stream_claim_batch",
             )
         except Exception:
             pass

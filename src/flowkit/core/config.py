@@ -4,14 +4,14 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class CoordinatorConfig:
     # ---- Kafka & topics
     kafka_bootstrap: str = "kafka:9092"
-    worker_types: List[str] = field(default_factory=lambda: ["indexer", "enricher", "grouper", "analyzer"])
+    worker_types: list[str] = field(default_factory=lambda: ["indexer", "enricher", "grouper", "analyzer"])
 
     topic_cmd_fmt: str = "cmd.{type}.v1"
     topic_status_fmt: str = "status.{type}.v1"
@@ -70,8 +70,8 @@ class CoordinatorConfig:
 
     # ---- loading
     @classmethod
-    def load(cls, path: Optional[str | Path] = None, *, overrides: Optional[Dict[str, Any]] = None) -> "CoordinatorConfig":
-        data: Dict[str, Any] = {}
+    def load(cls, path: str | Path | None = None, *, overrides: dict[str, Any] | None = None) -> CoordinatorConfig:
+        data: dict[str, Any] = {}
         # 1) base JSON
         if path:
             p = Path(path)
@@ -94,7 +94,7 @@ class CoordinatorConfig:
         cfg = cls(**data)
         cfg._derive_ms()
         return cfg
-    
+
 
 @dataclass
 class WorkerConfig:
@@ -110,8 +110,8 @@ class WorkerConfig:
     topic_signals: str = "signals.v1"
 
     # Identity
-    roles: List[str] = field(default_factory=lambda: ["echo"])
-    worker_id: Optional[str] = None  # if None -> will be generated
+    roles: list[str] = field(default_factory=lambda: ["echo"])
+    worker_id: str | None = None  # if None -> will be generated
     worker_version: str = "2.0.0"
 
     # Timing (seconds → ms derivations)
@@ -152,10 +152,10 @@ class WorkerConfig:
 
     # ---- loader
     @staticmethod
-    def load(path: str = "configs/worker.default.json", overrides: Optional[Dict[str, Any]] = None) -> "WorkerConfig":
-        data: Dict[str, Any] = {}
+    def load(path: str = "configs/worker.default.json", overrides: dict[str, Any] | None = None) -> WorkerConfig:
+        data: dict[str, Any] = {}
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         if overrides:
             data.update(overrides)

@@ -1,35 +1,38 @@
 from __future__ import annotations
+
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class Batch(BaseModel):
-    batch_uid: Optional[str] = None
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    batch_uid: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class BatchResult(BaseModel):
     success: bool
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    artifacts_ref: Optional[Dict[str, Any]] = None
-    reason_code: Optional[str] = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    artifacts_ref: dict[str, Any] | None = None
+    reason_code: str | None = None
     permanent: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class FinalizeResult(BaseModel):
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    artifacts_ref: Optional[Dict[str, Any]] = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    artifacts_ref: dict[str, Any] | None = None
 
 
 class RoleHandler:
     role: str
 
-    async def init(self, cfg: Dict[str, Any]) -> None:
+    async def init(self, cfg: dict[str, Any]) -> None:
         pass
 
-    async def load_input(self, input_ref: Optional[Dict[str, Any]], input_inline: Optional[Dict[str, Any]]) -> Any:
+    async def load_input(self, input_ref: dict[str, Any] | None, input_inline: dict[str, Any] | None) -> Any:
         return {"input_ref": input_ref or {}, "input_inline": input_inline or {}}
 
     async def iter_batches(self, loaded: Any) -> AsyncIterator[Batch]:
@@ -39,7 +42,7 @@ class RoleHandler:
         await asyncio.sleep(0)
         return BatchResult(success=True, metrics={"processed": 1})
 
-    async def finalize(self, ctx) -> Optional[FinalizeResult]:
+    async def finalize(self, ctx) -> FinalizeResult | None:
         return FinalizeResult(metrics={})
 
     def classify_error(self, exc: BaseException) -> tuple[str, bool]:

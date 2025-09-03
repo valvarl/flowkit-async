@@ -1,12 +1,15 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import os
-from dataclasses import dataclass, asdict
-from typing import Any, Optional
+from dataclasses import asdict, dataclass
+from typing import Any
 
-from ..core.time import Clock
+import anyio
+
 from ..core.config import WorkerConfig
+from ..core.time import Clock
 
 
 @dataclass
@@ -24,6 +27,7 @@ class ActiveRun:
 
 class LocalState:
     """Lightweight JSON persistence for resume-after-crash."""
+
     def __init__(self, cfg: WorkerConfig, clock: Clock) -> None:
         self.cfg = cfg
         self.clock = clock
@@ -34,12 +38,12 @@ class LocalState:
         self.data: dict[str, Any] = {}
         try:
             if os.path.exists(self._fp):
-                with open(self._fp, "r", encoding="utf-8") as f:
+                with open(self._fp, encoding="utf-8") as f:
                     self.data = json.load(f)
         except Exception:
             self.data = {}
 
-    async def write_active(self, ar: Optional[ActiveRun]) -> None:
+    async def write_active(self, ar: ActiveRun | None) -> None:
         async with self._lock:
             if ar is None:
                 self.data.pop("active_run", None)
@@ -47,11 +51,11 @@ class LocalState:
                 self.data["active_run"] = asdict(ar)
             self.data["updated_at_ms"] = self.clock.now_ms()
             tmp = self._fp + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            async with await anyio.open_file(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, separators=(",", ":"))
             os.replace(tmp, self._fp)
 
-    def read_active(self) -> Optional[ActiveRun]:
+    def read_active(self) -> ActiveRun | None:
         d = self.data.get("active_run")
         if not d:
             return None

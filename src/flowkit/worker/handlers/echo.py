@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import asyncio
-from .base import RoleHandler, Batch, BatchResult
+
+from .base import Batch, BatchResult, RoleHandler
 
 
 class EchoHandler(RoleHandler):

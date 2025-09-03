@@ -49,7 +49,7 @@ async def test_outbox_retry_backoff(env_and_imports, inmemory_db, coord, monkeyp
 
     await coord.outbox.enqueue(topic=topic, key=key, env=env)
 
-    async def wait_state(expect: str, timeout: float = 5.0):
+    async def wait_state(expect: str, timeout: float = 5.0):  # noqa: ASYNC109
         t0 = time.time()
         while time.time() - t0 < timeout:
             d = await inmemory_db.outbox.find_one({"topic": topic, "key": key})
@@ -61,13 +61,13 @@ async def test_outbox_retry_backoff(env_and_imports, inmemory_db, coord, monkeyp
     # After 1st failure
     d1 = await wait_state("retry", timeout=3.0)
     assert int(d1.get("attempts", 0)) == 1
-    base1 = min(max(coord.cfg.outbox_backoff_min_ms, (2 ** 1) * 100), coord.cfg.outbox_backoff_max_ms)
+    base1 = min(max(coord.cfg.outbox_backoff_min_ms, (2**1) * 100), coord.cfg.outbox_backoff_max_ms)
     min_expected_1 = int(base1 * 0.8)  # allow jitter -20%
     gap1 = int(d1.get("next_attempt_at_ms", 0)) - _dt_to_ms(d1.get("updated_at"))
     assert gap1 >= min_expected_1
 
     # After 2nd failure
-    async def wait_attempts_ge(n: int, timeout: float = 6.0):
+    async def wait_attempts_ge(n: int, timeout: float = 6.0):  # noqa: ASYNC109
         t0 = time.time()
         while time.time() - t0 < timeout:
             d = await inmemory_db.outbox.find_one({"topic": topic, "key": key})
@@ -78,13 +78,13 @@ async def test_outbox_retry_backoff(env_and_imports, inmemory_db, coord, monkeyp
 
     d2 = await wait_attempts_ge(2, timeout=6.0)
     assert int(d2.get("attempts", 0)) == 2
-    base2 = min(max(coord.cfg.outbox_backoff_min_ms, (2 ** 2) * 100), coord.cfg.outbox_backoff_max_ms)
+    base2 = min(max(coord.cfg.outbox_backoff_min_ms, (2**2) * 100), coord.cfg.outbox_backoff_max_ms)
     min_expected_2 = int(base2 * 0.8)
     gap2 = int(d2.get("next_attempt_at_ms", 0)) - _dt_to_ms(d2.get("updated_at"))
     assert gap2 >= min_expected_2
 
     # 3rd attempt → sent
-    d3 = await wait_state("sent", timeout=6.0)
+    await wait_state("sent", timeout=6.0)
     assert attempts[f"{topic}:{key}"] == 3, attempts
 
 
@@ -110,10 +110,14 @@ async def test_outbox_exactly_once_fp_uniqueness(env_and_imports, inmemory_db, c
     inmemory_db.outbox.insert_one = unique_insert_one  # type: ignore
 
     sent_calls: list[tuple[str, str, str]] = []
+    sent_evt = asyncio.Event()
     orig_raw = coord.bus._raw_send
 
     async def counting_raw_send(t, k, env):
         sent_calls.append((t, k.decode(), env.dedup_id))
+        # signal once the expected send happens
+        if t == topic and k.decode() == key:
+            sent_evt.set()
         await orig_raw(t, k, env)
 
     monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
@@ -145,9 +149,7 @@ async def test_outbox_exactly_once_fp_uniqueness(env_and_imports, inmemory_db, c
     await coord.outbox.enqueue(topic=topic, key=key, env=env2)  # duplicate → ignored
 
     # wait for the send to happen
-    t0 = time.time()
-    while time.time() - t0 < 3.0 and not any(s for s in sent_calls if s[0] == topic and s[1] == key):
-        await asyncio.sleep(0.02)
+    await asyncio.wait_for(sent_evt.wait(), timeout=3.0)
 
     # exactly one send
     sent_cnt = sum(1 for s in sent_calls if s[0] == topic and s[1] == key)

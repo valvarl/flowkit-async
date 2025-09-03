@@ -1,11 +1,11 @@
 from __future__ import annotations
-import asyncio
-from typing import Any, Dict, List, Optional
 
-from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+import asyncio
+
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from ..core.config import CoordinatorConfig
-from ..core.utils import dumps, loads
+from ..core.utils import loads
 from ..protocol.messages import Envelope
 
 
@@ -13,19 +13,20 @@ class KafkaBus:
     """
     Thin wrapper around AIOKafka with a minimal reply correlator (by corr_id).
     """
+
     def __init__(self, cfg: CoordinatorConfig) -> None:
         self.cfg = cfg
-        self._producer: Optional[AIOKafkaProducer] = None
-        self._consumers: List[AIOKafkaConsumer] = []
-        self._replies: Dict[str, List[Envelope]] = {}
-        self._reply_events: Dict[str, asyncio.Event] = {}
+        self._producer: AIOKafkaProducer | None = None
+        self._consumers: list[AIOKafkaConsumer] = []
+        self._replies: dict[str, list[Envelope]] = {}
+        self._reply_events: dict[str, asyncio.Event] = {}
         self.bootstrap = cfg.kafka_bootstrap
 
     async def start(self) -> None:
         self._producer = AIOKafkaProducer(
             bootstrap_servers=self.bootstrap,
             value_serializer=lambda x: x,  # we pass already-encoded bytes
-            enable_idempotence=True
+            enable_idempotence=True,
         )
         await self._producer.start()
 
@@ -40,7 +41,7 @@ class KafkaBus:
             await self._producer.stop()
         self._producer = None
 
-    async def new_consumer(self, topics: List[str], group_id: str, *, manual_commit: bool = True) -> AIOKafkaConsumer:
+    async def new_consumer(self, topics: list[str], group_id: str, *, manual_commit: bool = True) -> AIOKafkaConsumer:
         c = AIOKafkaConsumer(
             *topics,
             bootstrap_servers=self.bootstrap,
@@ -80,7 +81,7 @@ class KafkaBus:
         if ev:
             ev.set()
 
-    def collect_replies(self, corr_id: str) -> List[Envelope]:
+    def collect_replies(self, corr_id: str) -> list[Envelope]:
         envs = self._replies.pop(corr_id, [])
         self._reply_events.pop(corr_id, None)
         return envs

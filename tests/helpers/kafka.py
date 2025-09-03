@@ -4,12 +4,12 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .util import dbg
 
-
 # ───────────────────────── Chaos config ─────────────────────────
+
 
 @dataclass
 class ChaosConfig:
@@ -20,11 +20,12 @@ class ChaosConfig:
 
     Keep probabilities small to avoid flaky tests.
     """
+
     seed: int = 12345
-    broker_delay_range: Tuple[float, float] = (0.0, 0.003)      # seconds
-    consumer_poll_delay_range: Tuple[float, float] = (0.0, 0.002)
-    dup_prob_by_topic: Dict[str, float] = None                  # e.g. {"status.": 0.06}
-    drop_prob_by_topic: Dict[str, float] = None                 # e.g. {"cmd.": 0.01}
+    broker_delay_range: tuple[float, float] = (0.0, 0.003)  # seconds
+    consumer_poll_delay_range: tuple[float, float] = (0.0, 0.002)
+    dup_prob_by_topic: dict[str, float] = None  # e.g. {"status.": 0.06}
+    drop_prob_by_topic: dict[str, float] = None  # e.g. {"cmd.": 0.01}
     enable_broker_delays: bool = True
     enable_consumer_delays: bool = True
     enable_dup_drop: bool = True
@@ -38,11 +39,12 @@ class ChaosConfig:
 
 class _Chaos:
     """Runtime helper bound to a broker instance."""
+
     def __init__(self, cfg: ChaosConfig) -> None:
         self.cfg = cfg
         self.rng = random.Random(cfg.seed)
 
-    def _topic_prob(self, topic: str, table: Dict[str, float]) -> float:
+    def _topic_prob(self, topic: str, table: dict[str, float]) -> float:
         for pref, p in table.items():
             if topic.startswith(pref):
                 return float(p)
@@ -77,8 +79,10 @@ class _Chaos:
 
 # ───────────────────────── In-memory Kafka ─────────────────────────
 
+
 class _Rec:
-    __slots__ = ("value", "topic")
+    __slots__ = ("topic", "value")
+
     def __init__(self, value: Any, topic: str) -> None:
         self.value = value
         self.topic = topic
@@ -89,19 +93,20 @@ class InMemKafkaBroker:
     Tiny in-memory pub/sub with per-topic consumer groups.
     Optional chaos mode can add jitter and dup/drop to mimic real networks.
     """
+
     def __init__(self) -> None:
-        self.topics: Dict[str, Dict[str, asyncio.Queue]] = {}
-        self.rev: Dict[int, str] = {}
-        self._chaos: Optional[_Chaos] = None
+        self.topics: dict[str, dict[str, asyncio.Queue]] = {}
+        self.rev: dict[int, str] = {}
+        self._chaos: _Chaos | None = None
 
     # ── chaos control ────────────────────────────────────────────
-    def set_chaos(self, cfg: Optional[ChaosConfig]) -> None:
+    def set_chaos(self, cfg: ChaosConfig | None) -> None:
         """Enable or disable chaos. Pass None to disable."""
         self._chaos = _Chaos(cfg) if cfg is not None else None
         dbg("KAFKA.CHAOS", enabled=bool(self._chaos))
 
     @property
-    def chaos(self) -> Optional[_Chaos]:
+    def chaos(self) -> _Chaos | None:
         return self._chaos
 
     # ── lifecycle / plumbing ────────────────────────────────────
@@ -157,7 +162,7 @@ def reset_broker() -> None:
     BROKER.reset()
 
 
-def enable_chaos(cfg: Optional[ChaosConfig] = None) -> None:
+def enable_chaos(cfg: ChaosConfig | None = None) -> None:
     """
     Turn chaos ON/OFF. Call with a ChaosConfig to enable, or with None to disable.
     """
@@ -165,6 +170,7 @@ def enable_chaos(cfg: Optional[ChaosConfig] = None) -> None:
 
 
 # ───────────────────────── aiokafka mocks ─────────────────────────
+
 
 class AIOKafkaProducerMock:
     def __init__(self, *_, **__) -> None:
@@ -193,7 +199,7 @@ class AIOKafkaConsumerMock:
         self._topics = list(topics)
         self._group = group_id or "default"
         self._deser = value_deserializer
-        self._queues: List[asyncio.Queue] = []
+        self._queues: list[asyncio.Queue] = []
         self._paused = False
 
     async def start(self) -> None:

@@ -1,4 +1,4 @@
-"""
+r"""
 End-to-end streaming smoke test.
 
 Pipeline:
@@ -13,16 +13,19 @@ Checks:
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 import pytest_asyncio
 
 from tests.helpers import dbg
 from tests.helpers.graph import prime_graph, wait_task_finished
-from tests.helpers.handlers import (build_analyzer_handler,
-                                    build_enricher_handler,
-                                    build_indexer_handler, build_ocr_handler)
+from tests.helpers.handlers import (
+    build_analyzer_handler,
+    build_enricher_handler,
+    build_indexer_handler,
+    build_ocr_handler,
+)
 
 # Limit available roles for the module
 pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
@@ -39,9 +42,9 @@ async def workers_pipeline(env_and_imports, inmemory_db, worker_factory):
     """
     _, wu = env_and_imports
     await worker_factory(
-        ("indexer",  build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
         ("enricher", build_enricher_handler(db=inmemory_db)),
-        ("ocr",      build_ocr_handler(db=inmemory_db)),
+        ("ocr", build_ocr_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
     # Nothing to yield; worker_factory auto-stops on teardown
@@ -50,37 +53,72 @@ async def workers_pipeline(env_and_imports, inmemory_db, worker_factory):
 
 # ───────────────────────── Helpers ─────────────────────────
 
-def build_graph(*, total_skus=12, batch_size=5, mini_batch=2) -> Dict[str, Any]:
+
+def build_graph(*, total_skus=12, batch_size=5, mini_batch=2) -> dict[str, Any]:
     # Use input adapters as in real flow; analyzer starts on first batch fan-in.
     return {
         "schema_version": "1.0",
         "nodes": [
-            {"node_id": "w1", "type": "indexer", "depends_on": [], "fan_in": "all",
-             "io": {"input_inline": {"batch_size": batch_size, "total_skus": total_skus}}},
-            {"node_id": "w2", "type": "enricher", "depends_on": ["w1"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+            {
+                "node_id": "w1",
+                "type": "indexer",
+                "depends_on": [],
+                "fan_in": "all",
+                "io": {"input_inline": {"batch_size": batch_size, "total_skus": total_skus}},
+            },
+            {
+                "node_id": "w2",
+                "type": "enricher",
+                "depends_on": ["w1"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w1"], "size": mini_batch, "poll_ms": 50, "meta_list_key": "skus"}
-                    }}},
-            {"node_id": "w3", "type": "coordinator_fn", "depends_on": ["w1", "w2"], "fan_in": "all",
-             "io": {"fn": "merge.generic", "fn_args": {"from_nodes": ["w1", "w2"], "target": {"key": "w3-merged"}}}},
-            {"node_id": "w4", "type": "analyzer", "depends_on": ["w3", "w5"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {
+                            "from_nodes": ["w1"],
+                            "size": mini_batch,
+                            "poll_ms": 50,
+                            "meta_list_key": "skus",
+                        },
+                    },
+                },
+            },
+            {
+                "node_id": "w3",
+                "type": "coordinator_fn",
+                "depends_on": ["w1", "w2"],
+                "fan_in": "all",
+                "io": {"fn": "merge.generic", "fn_args": {"from_nodes": ["w1", "w2"], "target": {"key": "w3-merged"}}},
+            },
+            {
+                "node_id": "w4",
+                "type": "analyzer",
+                "depends_on": ["w3", "w5"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts",
-                        "input_args": {"from_nodes": ["w5", "w3"], "poll_ms": 40}
-                    }}},
-            {"node_id": "w5", "type": "ocr", "depends_on": ["w2"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {"from_nodes": ["w5", "w3"], "poll_ms": 40},
+                    },
+                },
+            },
+            {
+                "node_id": "w5",
+                "type": "ocr",
+                "depends_on": ["w2"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w2"], "size": 1, "poll_ms": 40, "meta_list_key": "enriched"}
-                    }}},
+                        "input_args": {"from_nodes": ["w2"], "size": 1, "poll_ms": 40, "meta_list_key": "enriched"},
+                    },
+                },
+            },
         ],
-        "edges": [
-            ["w1", "w2"], ["w2", "w3"], ["w1", "w3"], ["w3", "w4"], ["w2", "w5"], ["w5", "w4"]
-        ],
+        "edges": [["w1", "w2"], ["w2", "w3"], ["w1", "w3"], ["w3", "w4"], ["w2", "w5"], ["w5", "w4"]],
         # Optional extended-edge hints for async triggers (kept for realism)
         "edges_ex": [
             {"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"},
@@ -92,6 +130,7 @@ def build_graph(*, total_skus=12, batch_size=5, mini_batch=2) -> Dict[str, Any]:
 
 
 # ───────────────────────── Test ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_e2e_streaming_with_kafka_sim(env_and_imports, inmemory_db, coord, workers_pipeline):

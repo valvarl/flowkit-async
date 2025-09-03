@@ -1,8 +1,9 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Mapping, Callable
 
-from ..core.time import SystemClock
-from ..protocol.messages import RunState
+from collections.abc import Callable, Mapping
+from typing import Any
+
+from ..core.time import Clock, SystemClock
 
 
 class AdapterError(Exception):
@@ -15,11 +16,11 @@ class CoordinatorAdapters:
     They operate via injected `db`. Keep side-effects idempotent.
     """
 
-    def __init__(self, *, db, clock: SystemClock | None = None) -> None:
+    def __init__(self, *, db, clock: Clock | None = None) -> None:
         self.db = db
         self.clock = clock or SystemClock()
 
-    async def merge_generic(self, task_id: str, from_nodes: List[str], target: Dict[str, Any]) -> Dict[str, Any]:
+    async def merge_generic(self, task_id: str, from_nodes: list[str], target: dict[str, Any]) -> dict[str, Any]:
         if not target or not isinstance(target, dict):
             raise AdapterError("merge_generic: 'target' must be a dict with at least node_id")
         target_node = target.get("node_id") or "coordinator"
@@ -49,16 +50,23 @@ class CoordinatorAdapters:
 
         await self.db.artifacts.update_one(
             {"task_id": task_id, "node_id": target_node},
-            {"$set": {"status": "complete", "meta": meta, "updated_at": self.clock.now_dt()},
-             "$setOnInsert": {"task_id": task_id, "node_id": target_node, "attempt_epoch": 0, "created_at": self.clock.now_dt()}},
-            upsert=True
+            {
+                "$set": {"status": "complete", "meta": meta, "updated_at": self.clock.now_dt()},
+                "$setOnInsert": {
+                    "task_id": task_id,
+                    "node_id": target_node,
+                    "attempt_epoch": 0,
+                    "created_at": self.clock.now_dt(),
+                },
+            },
+            upsert=True,
         )
         return {"ok": True, "meta": meta}
 
-    async def metrics_aggregate(self, task_id: str, node_id: str, *, mode: str = "sum") -> Dict[str, Any]:
+    async def metrics_aggregate(self, task_id: str, node_id: str, *, mode: str = "sum") -> dict[str, Any]:
         cur = self.db.metrics_raw.find({"task_id": task_id, "node_id": node_id, "failed": {"$ne": True}})
-        acc: Dict[str, float] = {}
-        cnt: Dict[str, int] = {}
+        acc: dict[str, float] = {}
+        cnt: dict[str, int] = {}
         async for m in cur:
             for k, v in (m.get("metrics") or {}).items():
                 try:
@@ -72,16 +80,16 @@ class CoordinatorAdapters:
 
         await self.db.tasks.update_one(
             {"id": task_id, "graph.nodes.node_id": node_id},
-            {"$set": {"graph.nodes.$.stats": out, "graph.nodes.$.stats_cached_at": self.clock.now_dt()}}
+            {"$set": {"graph.nodes.$.stats": out, "graph.nodes.$.stats_cached_at": self.clock.now_dt()}},
         )
         return {"ok": True, "mode": mode, "stats": out}
 
-    async def noop(self, _: str, **__) -> Dict[str, Any]:
+    async def noop(self, _: str, **__) -> dict[str, Any]:
         return {"ok": True}
 
 
 # default registry factory
-def default_adapters(*, db, clock: SystemClock | None = None) -> Mapping[str, Callable[..., object]]:
+def default_adapters(*, db, clock: Clock | None = None) -> Mapping[str, Callable[..., object]]:
     impl = CoordinatorAdapters(db=db, clock=clock)
     return {
         "merge.generic": impl.merge_generic,

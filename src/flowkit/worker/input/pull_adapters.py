@@ -1,10 +1,11 @@
 from __future__ import annotations
-import asyncio
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
+import asyncio
+from collections.abc import AsyncIterator, Callable
+
+from ...core.config import WorkerConfig
 from ...core.time import Clock
 from ...core.utils import stable_hash
-from ...core.config import WorkerConfig
 from ..handlers.base import Batch
 
 
@@ -12,6 +13,7 @@ class PullAdapters:
     """
     pull.from_artifacts (+ rechunk) implemented as instance with injected db/clock.
     """
+
     def __init__(self, *, db, clock: Clock, cfg: WorkerConfig) -> None:
         self.db = db
         self.clock = clock
@@ -22,11 +24,11 @@ class PullAdapters:
         *,
         task_id: str,
         consumer_node: str,
-        from_nodes: List[str],
+        from_nodes: list[str],
         poll_ms: int,
         eof_on_task_done: bool,
         backoff_max_ms: int,
-        cancel_flag: Optional[asyncio.Event],
+        cancel_flag: asyncio.Event | None,
     ) -> AsyncIterator[Batch]:
 
         claimed_mem: set[tuple[str, str, str, str]] = set()
@@ -44,24 +46,29 @@ class PullAdapters:
             try:
                 for src in from_nodes:
                     matched = 0
-                    used_fallback = False
                     try:
-                        cur = self.db.artifacts.find(
-                            {"task_id": task_id, "node_id": src, "status": "partial"},
-                            {"_id": 0, "task_id": 1, "node_id": 1, "batch_uid": 1, "meta": 1, "created_at": 1}
-                        ).sort([("created_at", 1)]).limit(200)
+                        cur = (
+                            self.db.artifacts.find(
+                                {"task_id": task_id, "node_id": src, "status": "partial"},
+                                {"_id": 0, "task_id": 1, "node_id": 1, "batch_uid": 1, "meta": 1, "created_at": 1},
+                            )
+                            .sort([("created_at", 1)])
+                            .limit(200)
+                        )
                         async for a in cur:
                             batch_uid = a.get("batch_uid")
                             if not batch_uid:
                                 continue
                             try:
-                                await self.db.stream_progress.insert_one({
-                                    "task_id": task_id,
-                                    "consumer_node": consumer_node,
-                                    "from_node": src,
-                                    "batch_uid": batch_uid,
-                                    "claimed_at": self.clock.now_dt()
-                                })
+                                await self.db.stream_progress.insert_one(
+                                    {
+                                        "task_id": task_id,
+                                        "consumer_node": consumer_node,
+                                        "from_node": src,
+                                        "batch_uid": batch_uid,
+                                        "claimed_at": self.clock.now_dt(),
+                                    }
+                                )
                             except Exception:
                                 continue
                             matched += 1
@@ -69,28 +76,38 @@ class PullAdapters:
                             backoff_ms = poll_ms
                             yield Batch(
                                 batch_uid=batch_uid,
-                                payload={"from_node": src, "ref": {"task_id": task_id, "node_id": src, "batch_uid": batch_uid},
-                                         "meta": a.get("meta") or {}}
+                                payload={
+                                    "from_node": src,
+                                    "ref": {"task_id": task_id, "node_id": src, "batch_uid": batch_uid},
+                                    "meta": a.get("meta") or {},
+                                },
                             )
                     except Exception:
-                        used_fallback = True
                         rows = getattr(getattr(self.db, "artifacts", None), "rows", None)
                         if isinstance(rows, list):
                             for a in list(rows):
-                                if a.get("task_id") != task_id or a.get("node_id") != src or a.get("status") != "partial":
+                                if (
+                                    a.get("task_id") != task_id
+                                    or a.get("node_id") != src
+                                    or a.get("status") != "partial"
+                                ):
                                     continue
-                                batch_uid = a.get("batch_uid") or stable_hash({"task_id": task_id, "node_id": src, "meta": a.get("meta", {})})
+                                batch_uid = a.get("batch_uid") or stable_hash(
+                                    {"task_id": task_id, "node_id": src, "meta": a.get("meta", {})}
+                                )
                                 key = (task_id, consumer_node, src, batch_uid)
                                 if key in claimed_mem:
                                     continue
                                 try:
-                                    await self.db.stream_progress.insert_one({
-                                        "task_id": task_id,
-                                        "consumer_node": consumer_node,
-                                        "from_node": src,
-                                        "batch_uid": batch_uid,
-                                        "claimed_at": self.clock.now_dt()
-                                    })
+                                    await self.db.stream_progress.insert_one(
+                                        {
+                                            "task_id": task_id,
+                                            "consumer_node": consumer_node,
+                                            "from_node": src,
+                                            "batch_uid": batch_uid,
+                                            "claimed_at": self.clock.now_dt(),
+                                        }
+                                    )
                                 except Exception:
                                     pass
                                 claimed_mem.add(key)
@@ -99,8 +116,11 @@ class PullAdapters:
                                 backoff_ms = poll_ms
                                 yield Batch(
                                     batch_uid=batch_uid,
-                                    payload={"from_node": src, "ref": {"task_id": task_id, "node_id": src, "batch_uid": batch_uid},
-                                             "meta": (a.get("meta") or {})}
+                                    payload={
+                                        "from_node": src,
+                                        "ref": {"task_id": task_id, "node_id": src, "batch_uid": batch_uid},
+                                        "meta": (a.get("meta") or {}),
+                                    },
                                 )
 
                 if got_any:
@@ -110,7 +130,9 @@ class PullAdapters:
                     all_complete = True
                     for src in from_nodes:
                         try:
-                            c = await self.db.artifacts.count_documents({"task_id": task_id, "node_id": src, "status": "complete"})
+                            c = await self.db.artifacts.count_documents(
+                                {"task_id": task_id, "node_id": src, "status": "complete"}
+                            )
                             if c <= 0:
                                 all_complete = False
                                 break
@@ -136,13 +158,13 @@ class PullAdapters:
         *,
         task_id: str,
         consumer_node: str,
-        from_nodes: List[str],
+        from_nodes: list[str],
         size: int,
         poll_ms: int,
         eof_on_task_done: bool,
         backoff_max_ms: int,
-        meta_list_key: Optional[str],
-        cancel_flag: Optional[asyncio.Event],
+        meta_list_key: str | None,
+        cancel_flag: asyncio.Event | None,
     ) -> AsyncIterator[Batch]:
         if size <= 0:
             size = 1
@@ -174,11 +196,15 @@ class PullAdapters:
 
                 idx = 0
                 for i in range(0, len(items), size):
-                    chunk = items[i:i+size]
+                    chunk = items[i : i + size]
                     chunk_uid = stable_hash({"src": src, "parent": parent_uid, "idx": idx})
                     yield Batch(
                         batch_uid=chunk_uid,
-                        payload={"from_node": src, "items": chunk, "parent": {"ref": {"batch_uid": parent_uid}, "list_key": key}}
+                        payload={
+                            "from_node": src,
+                            "items": chunk,
+                            "parent": {"ref": {"batch_uid": parent_uid}, "list_key": key},
+                        },
                     )
                     idx += 1
 
@@ -188,7 +214,7 @@ class PullAdapters:
             yield y
 
 
-def build_input_adapters(*, db, clock: Clock, cfg: WorkerConfig) -> Dict[str, Callable[..., AsyncIterator[Batch]]]:
+def build_input_adapters(*, db, clock: Clock, cfg: WorkerConfig) -> dict[str, Callable[..., AsyncIterator[Batch]]]:
     impl = PullAdapters(db=db, clock=clock, cfg=cfg)
     return {
         "pull.from_artifacts": impl.iter_from_artifacts,

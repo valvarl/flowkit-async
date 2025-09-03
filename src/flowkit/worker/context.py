@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 import asyncio
 import os
 import signal
 import subprocess as subproc
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from ..core.time import Clock
 
@@ -16,11 +18,12 @@ class RunContext:
     - subprocess group termination with escalation
     - resource cleanup registry
     """
+
     def __init__(
         self,
         *,
         cancel_flag: asyncio.Event,
-        cancel_meta: Dict[str, Any],
+        cancel_meta: dict[str, Any],
         artifacts_writer,
         clock: Clock,
         task_id: str,
@@ -38,24 +41,24 @@ class RunContext:
         self.attempt_epoch = attempt_epoch
         self.worker_id = worker_id
 
-        self.kv: Dict[str, Any] = {}
-        self._cleanup_callbacks: List[Callable[[], Any]] = []
-        self._subprocesses: List[Any] = []
-        self._temp_paths: List[str] = []
+        self.kv: dict[str, Any] = {}
+        self._cleanup_callbacks: list[Callable[[], Any]] = []
+        self._subprocesses: list[Any] = []
+        self._temp_paths: list[str] = []
 
     # ---- cancellation
     def cancelled(self) -> bool:
         return self._cancel_flag.is_set()
 
     @property
-    def cancel_reason(self) -> Optional[str]:
+    def cancel_reason(self) -> str | None:
         return self._cancel_meta.get("reason")
 
     @property
-    def cancel_deadline_ts_ms(self) -> Optional[int]:
+    def cancel_deadline_ts_ms(self) -> int | None:
         return self._cancel_meta.get("deadline_ts_ms")
 
-    def remaining_ms(self) -> Optional[float]:
+    def remaining_ms(self) -> float | None:
         dl = self.cancel_deadline_ts_ms
         if not dl:
             return None
@@ -89,7 +92,7 @@ class RunContext:
 
     # ---- subprocess helpers
     async def run_subprocess(self, *cmd: str, grace_ms: int = 5000) -> int:
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         if os.name == "posix":
             kwargs["preexec_fn"] = os.setsid
         else:
@@ -140,7 +143,7 @@ class RunContext:
                         pass
             try:
                 await asyncio.wait_for(proc.wait(), timeout=max(0.001, grace_ms / 1000.0))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 try:
                     proc.kill()
                 except Exception:

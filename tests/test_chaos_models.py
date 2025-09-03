@@ -1,4 +1,4 @@
-"""
+r"""
 End-to-end streaming smoke tests under chaos.
 
 Pipelines covered:
@@ -15,13 +15,12 @@ Checks:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 import pytest_asyncio
 
 from tests.helpers import dbg
-from tests.helpers.kafka import BROKER  # optional, e.g., for spying/debug
 from tests.helpers.graph import prime_graph, wait_task_finished
 from tests.helpers.handlers import (
     build_analyzer_handler,
@@ -37,6 +36,7 @@ pytestmark = [
 ]
 
 # ───────────────────────── Fixtures ─────────────────────────
+
 
 @pytest_asyncio.fixture
 async def coord(env_and_imports, inmemory_db, coord_cfg):
@@ -59,9 +59,9 @@ async def workers_pipeline(env_and_imports, inmemory_db, worker_factory):
     Handlers come from tests.helpers.handlers and already receive `db`.
     """
     await worker_factory(
-        ("indexer",  build_indexer_handler(db=inmemory_db)),
+        ("indexer", build_indexer_handler(db=inmemory_db)),
         ("enricher", build_enricher_handler(db=inmemory_db)),
-        ("ocr",      build_ocr_handler(db=inmemory_db)),
+        ("ocr", build_ocr_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
     # Nothing to yield; worker_factory auto-stops on teardown
@@ -75,15 +75,15 @@ async def workers(env_and_imports, inmemory_db, worker_factory):
     We keep handler refs to support mid-test restarts.
     """
     handlers = {
-        "indexer":  build_indexer_handler(db=inmemory_db),
+        "indexer": build_indexer_handler(db=inmemory_db),
         "enricher": build_enricher_handler(db=inmemory_db),
-        "ocr":      build_ocr_handler(db=inmemory_db),
+        "ocr": build_ocr_handler(db=inmemory_db),
         "analyzer": build_analyzer_handler(db=inmemory_db),
     }
     w1, w2, w3, w4 = await worker_factory(
-        ("indexer",  handlers["indexer"]),
+        ("indexer", handlers["indexer"]),
         ("enricher", handlers["enricher"]),
-        ("ocr",      handlers["ocr"]),
+        ("ocr", handlers["ocr"]),
         ("analyzer", handlers["analyzer"]),
     )
     yield {"w1": w1, "w2": w2, "w3": w3, "w4": w4, "handlers": handlers}
@@ -91,41 +91,78 @@ async def workers(env_and_imports, inmemory_db, worker_factory):
 
 # ───────────────────────── Graph helpers ─────────────────────────
 
-def build_graph(*, total_skus=18, batch_size=5, mini_batch=3) -> Dict[str, Any]:
+
+def build_graph(*, total_skus=18, batch_size=5, mini_batch=3) -> dict[str, Any]:
     """Graph matching the real flow, with a coordinator_fn merge in the middle."""
     return {
         "schema_version": "1.0",
         "nodes": [
-            {"node_id": "w1", "type": "indexer", "depends_on": [], "fan_in": "all",
-             "io": {"input_inline": {"batch_size": batch_size, "total_skus": total_skus}}},
-
-            {"node_id": "w2", "type": "enricher", "depends_on": ["w1"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+            {
+                "node_id": "w1",
+                "type": "indexer",
+                "depends_on": [],
+                "fan_in": "all",
+                "io": {"input_inline": {"batch_size": batch_size, "total_skus": total_skus}},
+            },
+            {
+                "node_id": "w2",
+                "type": "enricher",
+                "depends_on": ["w1"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w1"], "size": mini_batch, "poll_ms": 30, "meta_list_key": "skus"}
-                    }}},
-
-            {"node_id": "w3", "type": "coordinator_fn", "depends_on": ["w1", "w2"], "fan_in": "all",
-             "io": {"fn": "merge.generic",
-                    "fn_args": {"from_nodes": ["w1", "w2"], "target": {"key": "w3-merged"}}}},
-
-            {"node_id": "w5", "type": "ocr", "depends_on": ["w2"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {
+                            "from_nodes": ["w1"],
+                            "size": mini_batch,
+                            "poll_ms": 30,
+                            "meta_list_key": "skus",
+                        },
+                    },
+                },
+            },
+            {
+                "node_id": "w3",
+                "type": "coordinator_fn",
+                "depends_on": ["w1", "w2"],
+                "fan_in": "all",
+                "io": {"fn": "merge.generic", "fn_args": {"from_nodes": ["w1", "w2"], "target": {"key": "w3-merged"}}},
+            },
+            {
+                "node_id": "w5",
+                "type": "ocr",
+                "depends_on": ["w2"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w2"], "size": 2, "poll_ms": 25, "meta_list_key": "enriched"}
-                    }}},
-
-            {"node_id": "w4", "type": "analyzer", "depends_on": ["w3", "w5"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {"from_nodes": ["w2"], "size": 2, "poll_ms": 25, "meta_list_key": "enriched"},
+                    },
+                },
+            },
+            {
+                "node_id": "w4",
+                "type": "analyzer",
+                "depends_on": ["w3", "w5"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts",
-                        "input_args": {"from_nodes": ["w5", "w3"], "poll_ms": 25}
-                    }}},
+                        "input_args": {"from_nodes": ["w5", "w3"], "poll_ms": 25},
+                    },
+                },
+            },
         ],
         "edges": [
-            ["w1", "w2"], ["w2", "w3"], ["w1", "w3"], ["w2", "w5"], ["w5", "w4"], ["w3", "w4"],
+            ["w1", "w2"],
+            ["w2", "w3"],
+            ["w1", "w3"],
+            ["w2", "w5"],
+            ["w5", "w4"],
+            ["w3", "w4"],
         ],
         "edges_ex": [
             {"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"},
@@ -136,31 +173,57 @@ def build_graph(*, total_skus=18, batch_size=5, mini_batch=3) -> Dict[str, Any]:
     }
 
 
-def graph_stream() -> Dict[str, Any]:
+def graph_stream() -> dict[str, Any]:
     """Streaming pipeline: indexer → enricher → ocr → analyzer."""
     return {
         "schema_version": "1.0",
         "nodes": [
-            {"node_id": "w1", "type": "indexer", "depends_on": [], "fan_in": "all",
-             "io": {"input_inline": {"batch_size": 5, "total_skus": 18}}},
-            {"node_id": "w2", "type": "enricher", "depends_on": ["w1"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+            {
+                "node_id": "w1",
+                "type": "indexer",
+                "depends_on": [],
+                "fan_in": "all",
+                "io": {"input_inline": {"batch_size": 5, "total_skus": 18}},
+            },
+            {
+                "node_id": "w2",
+                "type": "enricher",
+                "depends_on": ["w1"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w1"], "size": 3, "poll_ms": 30, "meta_list_key": "skus"}
-                    }}},
-            {"node_id": "w5", "type": "ocr", "depends_on": ["w2"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {"from_nodes": ["w1"], "size": 3, "poll_ms": 30, "meta_list_key": "skus"},
+                    },
+                },
+            },
+            {
+                "node_id": "w5",
+                "type": "ocr",
+                "depends_on": ["w2"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts.rechunk:size",
-                        "input_args": {"from_nodes": ["w2"], "size": 2, "poll_ms": 25, "meta_list_key": "enriched"}
-                    }}},
-            {"node_id": "w4", "type": "analyzer", "depends_on": ["w5"], "fan_in": "any",
-             "io": {"start_when": "first_batch",
+                        "input_args": {"from_nodes": ["w2"], "size": 2, "poll_ms": 25, "meta_list_key": "enriched"},
+                    },
+                },
+            },
+            {
+                "node_id": "w4",
+                "type": "analyzer",
+                "depends_on": ["w5"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
                     "input_inline": {
                         "input_adapter": "pull.from_artifacts",
-                        "input_args": {"from_nodes": ["w5"], "poll_ms": 25}
-                    }}},
+                        "input_args": {"from_nodes": ["w5"], "poll_ms": 25},
+                    },
+                },
+            },
         ],
         "edges": [["w1", "w2"], ["w2", "w5"], ["w5", "w4"]],
         "edges_ex": [
@@ -172,6 +235,7 @@ def graph_stream() -> Dict[str, Any]:
 
 
 # ───────────────────────── Tests: extended graph ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_e2e_streaming_with_kafka_chaos(env_and_imports, inmemory_db, coord, workers_pipeline):
@@ -204,6 +268,7 @@ async def test_e2e_streaming_with_kafka_chaos(env_and_imports, inmemory_db, coor
 
 
 # ───────────────────────── Tests: exact snippets you asked to include ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_chaos_delays_and_duplications(env_and_imports, inmemory_db, coord, workers):
@@ -244,8 +309,15 @@ async def test_chaos_worker_restart_mid_stream(env_and_imports, inmemory_db, coo
         await new_w2.start()
         workers["w2"] = new_w2  # ensure teardown stops the new one
 
-    asyncio.create_task(restart_enricher())
+    restart_enricher_task = asyncio.create_task(restart_enricher())
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=25.0)
+
+    # Ensure the background restart finished
+    try:
+        await asyncio.wait_for(restart_enricher_task, timeout=5.0)
+    except Exception:
+        # best-effort only; test already validated completion
+        pass
 
     st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
     assert all(st[n] == cd.RunState.finished for n in ("w1", "w2", "w5", "w4"))
@@ -266,8 +338,15 @@ async def test_chaos_coordinator_restart(env_and_imports, inmemory_db, coord, wo
         await coord.stop()
         await coord.start()
 
-    asyncio.create_task(restart_coord())
+    restart_coord_task = asyncio.create_task(restart_coord())
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=25.0)
+
+    # Ensure the background restart finished
+    try:
+        await asyncio.wait_for(restart_coord_task, timeout=5.0)
+    except Exception:
+        # best-effort only; test already validated completion
+        pass
 
     st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
     assert all(st[n] == cd.RunState.finished for n in ("w1", "w2", "w5", "w4"))
