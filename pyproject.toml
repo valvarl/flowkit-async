@@ -63,6 +63,8 @@ markers = [
   "worker_types(name): override worker types for this test module",
   "use_handlers(names): restrict which test handlers to instantiate",
   "cfg(coord=None, worker=None): per-test Coordinator/Worker config overrides",
+  "use_outbox: enable real Outbox dispatcher (no bypass)",
+  "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test",
 ]
 
 # ── Ruff (линтер) ────────────────────────────────────────────

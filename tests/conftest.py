@@ -1,20 +1,22 @@
 # conftest.py
 from __future__ import annotations
+
 from typing import Any, Tuple
 
 import pytest
 import pytest_asyncio
 
 from tests.helpers import install_inmemory_db, setup_env_and_imports
-from tests.helpers.handlers import (
-    build_cancelable_source_handler,
-    build_counting_source_handler,
-    build_flaky_once_handler,
-    build_noop_handler,
-    build_permanent_fail_handler,
-    build_slow_source_handler,
-)
-from tests.helpers.graph import node_by_id, wait_task_status, make_graph  # re-export
+from tests.helpers.graph import (make_graph, node_by_id,  # re-export
+                                 wait_task_status)
+from tests.helpers.handlers import (build_cancelable_source_handler,
+                                    build_counting_source_handler,
+                                    build_flaky_once_handler,
+                                    build_noop_handler,
+                                    build_permanent_fail_handler,
+                                    build_slow_source_handler)
+from tests.helpers.kafka import ChaosConfig, enable_chaos
+
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -32,6 +34,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "use_outbox: enable real Outbox dispatcher (no bypass)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test",
     )
 
 def _cfg_overrides_from_marker(request):
@@ -79,6 +85,19 @@ def env_and_imports(monkeypatch, request, _outbox_env):
     """
     wt = _worker_types_from_marker(request, default="indexer,enricher,ocr,analyzer,source,flaky,a,b,c,noop,sleepy")
     cd, wu = setup_env_and_imports(monkeypatch, worker_types=wt)
+
+    # Toggle chaos if requested by the test
+    if request.node.get_closest_marker("chaos"):
+        # Safe defaults: small jitter and duplications; drops disabled to avoid flakiness
+        enable_chaos(ChaosConfig(
+            broker_delay_range=(0.0, 0.003),
+            consumer_poll_delay_range=(0.0, 0.002),
+            dup_prob_by_topic={"status.": 0.08, "cmd.": 0.05},
+            drop_prob_by_topic={},              # keep off by default
+        ))
+    else:
+        enable_chaos(None)
+
     return cd, wu
 
 @pytest.fixture(scope="function")
