@@ -384,9 +384,9 @@ def build_cancelable_source_handler(*, db: Any, total: int, batch: int, delay: f
 def build_flaky_once_handler(*, db: Any) -> RoleHandler:
     return _FlakyOnce(db=db)
 
-def build_permanent_fail_handler(*, db: Any, role_name: str = "a") -> RoleHandler:
+def build_permanent_fail_handler(*, db: Any, role: str = "a") -> RoleHandler:
     h = _PermanentFail(db=db)
-    h.role = role_name  # allow "a"/custom role for cascade graphs
+    h.role = role  # allow "a"/custom role for cascade graphs
     return h
 
 def build_noop_handler(*, db: Any, role: str) -> RoleHandler:

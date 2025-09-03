@@ -254,7 +254,7 @@ async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, c
     """
     cd, _ = env_and_imports
 
-    await worker_factory(("flaky", build_flaky_once_handler(db=inmemory_db, role="flaky")))
+    await worker_factory(("flaky", build_flaky_once_handler(db=inmemory_db)))
 
     graph = prime_graph(cd, make_graph(
         nodes=[{

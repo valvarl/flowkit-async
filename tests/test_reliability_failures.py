@@ -150,9 +150,9 @@ async def test_permanent_fail_cascades_cancel_and_task_failed(env_and_imports, i
     cd, _ = env_and_imports
 
     await worker_factory(
-        ("a", build_permanent_fail_handler(db=inmemory_db, role_name="a")),
-        ("b", build_noop_handler(db=inmemory_db, role_name="b")),
-        ("c", build_noop_handler(db=inmemory_db, role_name="c")),
+        ("a", build_permanent_fail_handler(db=inmemory_db, role="a")),
+        ("b", build_noop_handler(db=inmemory_db, role="b")),
+        ("c", build_noop_handler(db=inmemory_db, role="c")),
     )
 
     graph = make_graph(
@@ -208,6 +208,7 @@ async def test_status_fencing_ignores_stale_epoch(env_and_imports, inmemory_db, 
         node_id="s",
         step_type="source",
         attempt_epoch=0,  # stale epoch
+        ts_ms=coord.clock.now_ms(),
         payload={
             "kind": EventKind.BATCH_OK,
             "worker_id": "WZ",
