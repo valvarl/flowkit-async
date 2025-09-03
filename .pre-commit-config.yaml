@@ -1,4 +1,3 @@
-# .pre-commit-config.yaml
 minimum_pre_commit_version: "3.6.0"
 
 default_language_version:
@@ -15,7 +14,7 @@ exclude: |
   )$
 
 repos:
-  # ───────── Ruff (lint + isort автофикс) ─────────
+  # Ruff: lint + isort autofix
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.6.9
     hooks:
@@ -24,7 +23,7 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
         files: ^(src|tests)/.*\.py$
 
-  # ───────── Black (форматтер как в CI) ─────────
+  # Black: single source of truth for formatting
   - repo: https://github.com/psf/black
     rev: 24.8.0
     hooks:
@@ -32,18 +31,17 @@ repos:
         language_version: python3.12
         files: ^(src|tests)/.*\.py$
 
-  # ───────── Mypy (берёт конфиг из pyproject.toml → [tool.mypy]) ─────────
+  # MyPy: reads config from pyproject [tool.mypy]
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
         name: mypy (src only)
         files: ^src/.*\.py$
-        # без --config-file: mypy сам прочитает [tool.mypy] из pyproject.toml
         additional_dependencies:
           - types-setuptools
 
-  # ───────── Bandit (security lint кода) — только на push ─────────
+  # Bandit: security linter (pre-push)
   - repo: https://github.com/PyCQA/bandit
     rev: 1.7.9
     hooks:
@@ -53,8 +51,7 @@ repos:
         stages: [pre-push]
         pass_filenames: false
 
-  # ───────── pip-audit (CVE по зависимостям) — только на push ─────────
-  # У тебя нет requirements.txt → сканим текущее окружение (dev deps тоже ок).
+  # pip-audit: project deps only (pre-push), isolated in hook venv
   - repo: local
     hooks:
       - id: pip-audit
@@ -62,12 +59,11 @@ repos:
         language: python
         additional_dependencies:
           - pip-audit
-        # Устанавливаем твой проект в venv pre-commit'а и сканируем ТОЛЬКО его граф
         entry: bash -lc 'pip install -q -e .[dev] || pip install -q -e .; pip-audit'
         stages: [pre-push]
         pass_filenames: false
 
-  # ───────── Базовые sanity-хуки ─────────
+  # Core sanity hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:

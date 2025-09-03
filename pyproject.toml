@@ -11,19 +11,20 @@ requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Flowkit authors" }]
 
-# Runtime deps (stdlib modules like asyncio/json/... не указываем)
+# Runtime dependencies
 dependencies = [
   "aiokafka>=0.8.2",
   "pydantic>=2.5",
 ]
 
-# Optional groups
 [project.optional-dependencies]
+# Test-only dependencies
 test = [
   "pytest>=7.4",
   "pytest-asyncio>=0.23",
   "pytest-repeat>=0.9.4",
 ]
+# Development tooling (linters, type checking, coverage, etc.)
 dev = [
   "ruff>=0.5",
   "black>=24.4",
@@ -33,7 +34,6 @@ dev = [
   "pytest-asyncio>=0.23",
 ]
 
-# Если когда-то появится CLI — добавьте здесь консольные скрипты
 # [project.scripts]
 # flowkit = "flowkit.__main__:main"
 
@@ -44,21 +44,20 @@ package-dir = { "" = "src" }
 where = ["src"]
 include = ["flowkit*"]
 
-# Упаковываем конфиги, чтобы они были доступны после установки
-# Путь установки — <prefix>/share/flowkit
+# Install configuration files into <prefix>/share/flowkit
 [tool.setuptools.data-files]
 "share/flowkit" = [
   "configs/coordinator.default.json",
   "configs/worker.default.json",
 ]
 
-# ── Pytest defaults ──────────────────────────────────────────
+# --------------------------------------------------------------------
+# Pytest
+# --------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = [
-  "ignore::DeprecationWarning",
-]
+filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
   "worker_types(name): override worker types for this test module",
   "use_handlers(names): restrict which test handlers to instantiate",
@@ -67,7 +66,9 @@ markers = [
   "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test",
 ]
 
-# ── Ruff (линтер) ────────────────────────────────────────────
+# --------------------------------------------------------------------
+# Ruff (lint)
+# --------------------------------------------------------------------
 [tool.ruff]
 target-version = "py312"
 line-length = 120
@@ -75,31 +76,32 @@ extend-exclude = ["build", "dist"]
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-# Подборка полезных правил (без излишнего шума)
 select = [
-  "E",    # pycodestyle (errors)
-  "F",    # pyflakes
-  "I",    # isort (импорт-упорядочивание)
-  "UP",   # pyupgrade
-  "B",    # flake8-bugbear
-  "ASYNC",# flake8-async
-  "W",    # pycodestyle (warnings)
-  "PERF", # perflint
-  "RUF",  # ruff-specific
+  "E",     # pycodestyle (errors)
+  "F",     # pyflakes
+  "I",     # isort
+  "UP",    # pyupgrade
+  "B",     # flake8-bugbear
+  "ASYNC", # flake8-async
+  "W",     # pycodestyle (warnings)
+  "PERF",  # perflint
+  "RUF",   # ruff-specific
 ]
 ignore = [
-  "E203", # Совместимость с black по срезам
+  "E203",  # keep compatibility with Black on slices
 ]
 
 [tool.ruff.format]
-# Мы используем black для форматирования; у ruff только lint.
+# Black handles formatting; Ruff only lints.
 quote-style = "preserve"
 
-# ── Black (форматтер) ────────────────────────────────────────
+# --------------------------------------------------------------------
+# Black (formatter)
+# --------------------------------------------------------------------
 [tool.black]
 line-length = 120
 target-version = ["py312"]
-include = '\.pyi?$'
+include = "\\.pyi?$"
 exclude = '''
 /(
     \.git
@@ -110,19 +112,21 @@ exclude = '''
 )/
 '''
 
-# ── MyPy (типизация) ────────────────────────────────────────
+# --------------------------------------------------------------------
+# MyPy (type checking)
+# --------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.12"
-# Не душим разработку: начинаем мягко, потом можно ужесточать
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_return_any = true
 show_error_codes = true
 pretty = true
-# Мы и так запускаем mypy только по src, но на всякий случай:
 exclude = ["tests/"]
 
-# ── Coverage (опционально) ───────────────────────────────────
+# --------------------------------------------------------------------
+# Coverage
+# --------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
 source = ["flowkit"]
