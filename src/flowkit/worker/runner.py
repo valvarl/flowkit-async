@@ -362,7 +362,8 @@ class Worker:
 
     # ---------- Handler execution ----------
     async def _run_handler(self, role: str, start_env: Envelope, cmd: CmdTaskStart) -> None:
-        assert self.active is not None
+        if self.active is None:
+            raise RuntimeError("No active run")
         handler = self.handlers.get(role)
         if not handler:
             await self._emit_task_failed(role, start_env, "no_handler", True, "handler not registered")
@@ -526,7 +527,8 @@ class Worker:
 
     # ---------- Heartbeat ----------
     async def _heartbeat_loop(self, role: str) -> None:
-        assert self.active is not None
+        if self.active is None:
+            raise RuntimeError("No active run")
         try:
             while self._busy and not self._stopping and self.active is not None:
                 lease_deadline_ms = self.clock.now_ms() + self.cfg.lease_ttl_ms
