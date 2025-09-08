@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+from contextlib import suppress
 from enum import Enum
 
 import pytest
@@ -8,11 +10,8 @@ import pytest_asyncio
 
 from tests.helpers import BROKER, AIOKafkaConsumerMock
 from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
-from tests.helpers.handlers import (
-    build_analyzer_handler,
-    build_flaky_once_handler,
-    build_indexer_handler,
-)
+from tests.helpers.handlers import build_analyzer_handler, build_flaky_once_handler, build_indexer_handler
+from tests.helpers.util import stable_hash
 
 # Ограничиваем роли для ускорения/избежания лишних handler'ов
 pytestmark = pytest.mark.worker_types("indexer,analyzer,flaky")
@@ -354,45 +353,61 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
 @pytest.mark.asyncio
 async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemory_db, coord, workers):
     """
-    After accepting epoch 1, inject an old BATCH_OK(epoch=0). Coordinator must ignore it by fencing.
+    After a node restarts with a higher epoch, the coordinator must ignore a stale BATCH_OK
+    from a lower epoch. Also ensure injected stale event doesn't create duplicate metrics.
     """
     cd, _ = env_and_imports
     g = prime_graph(cd, graph_restart_flaky())
     tid = await coord.create_task(params={}, graph=g)
 
     status_topic = "status.flaky.v1"
-    spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.old_bok")
+    spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.fence_bok")
     await spy.start()
 
     async def collect_and_inject():
-        saved_bok = None
+        saved_bok_e1 = None
+        seen_accept_e1 = False
+
         while True:
             rec = await spy.getone()
             env = rec.value
             if env.get("task_id") != tid or env.get("msg_type") != "event" or env.get("node_id") != "fx":
                 continue
-            epoch = int(env.get("attempt_epoch", 0))
-            kind = (env.get("payload") or {}).get("kind")
 
-            if epoch == 0 and kind == "BATCH_OK":
-                saved_bok = env
+            kind = (env.get("payload") or {}).get("kind")
+            epoch = int(env.get("attempt_epoch", 0))
 
             if kind == "TASK_ACCEPTED" and epoch >= 1:
-                if saved_bok:
-                    await BROKER.produce(status_topic, saved_bok)
-                return
+                seen_accept_e1 = True
+                if saved_bok_e1:
+                    # Forge a stale BATCH_OK from epoch 0 with its own dedup_id so its recorded
+                    fake_old = copy.deepcopy(saved_bok_e1)
+                    fake_old["attempt_epoch"] = 0
+                    uid = (fake_old.get("payload") or {}).get("batch_uid")
+                    fake_old["dedup_id"] = stable_hash({"bok": tid, "n": "fx", "e": 0, "uid": uid})
+                    await BROKER.produce(status_topic, fake_old)
+                    return
+
+            if kind == "BATCH_OK" and epoch >= 1:
+                saved_bok_e1 = env
+                if seen_accept_e1:
+                    fake_old = copy.deepcopy(saved_bok_e1)
+                    fake_old["attempt_epoch"] = 0
+                    uid = (fake_old.get("payload") or {}).get("batch_uid")
+                    fake_old["dedup_id"] = stable_hash({"bok": tid, "n": "fx", "e": 0, "uid": uid})
+                    await BROKER.produce(status_topic, fake_old)
+                    return
 
     coll_task = asyncio.create_task(collect_and_inject())
 
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
 
     coll_task.cancel()
-    try:
+    with suppress(asyncio.CancelledError):
         await coll_task
-    except Exception:
-        pass
     await spy.stop()
 
+    # Node finished and epoch advanced (retry happened)
     node_map = {n["node_id"]: n for n in tdoc["graph"]["nodes"]}
     fx = node_map["fx"]
     st = fx.get("status")
@@ -401,9 +416,20 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     assert st == "finished"
     assert int(fx.get("attempt_epoch", 0)) >= 1
 
-    # Ensure duplicate BATCH_OK didn't add extra metrics (one doc per batch_uid)
-    cnt = 0
-    cur = inmemory_db.metrics_raw.find({"task_id": tid, "node_id": "fx", "batch_uid": "r-0"})
+    # Verify the injected stale event was actually recorded by coordinator's event log
+    stale_count = 0
+    cur = inmemory_db.worker_events.find(
+        {"task_id": tid, "node_id": "fx", "attempt_epoch": 0, "payload.kind": "BATCH_OK"}
+    )
     async for _ in cur:
-        cnt += 1
-    assert cnt == 1, f"expected 1 metrics doc for batch_uid r-0, got {cnt}"
+        stale_count += 1
+    assert stale_count == 1, f"expected injected stale BATCH_OK to be recorded once, got {stale_count}"
+
+    # Metrics deduplication: exactly one metrics doc per batch_uid for this node
+    counts = {}
+    cur = inmemory_db.metrics_raw.find({"task_id": tid, "node_id": "fx"})
+    async for m in cur:
+        uid = m.get("batch_uid")
+        counts[uid] = counts.get(uid, 0) + 1
+    assert counts, "no metrics were recorded"
+    assert all(c == 1 for c in counts.values()), f"duplicate metrics found: {counts}"
