@@ -6,8 +6,8 @@ from typing import Any
 
 
 def stable_hash(payload: Any) -> str:
-    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha1(data.encode("utf-8")).hexdigest()
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.blake2b(data, digest_size=20).hexdigest()
 
 
 def dumps(x: Any) -> bytes:
