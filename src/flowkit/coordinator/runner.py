@@ -87,6 +87,22 @@ class Coordinator:
         await self.outbox.stop()
         await self.bus.stop()
 
+    async def restart(self) -> None:
+        """
+        Soft restart: stop coordinator loops and Kafka consumers, then bring them back up.
+        DB/Bus/Outbox instances are preserved so DB-backed deduplication
+        (worker_events / metrics_raw / outbox) remains intact.
+        """
+        # Fully stop current loops/consumers
+        await self.stop()
+        # Reset internal references for a clean start
+        self._announce_consumer = None
+        self._query_reply_consumer = None
+        self._status_consumers = {}
+        self._tasks = set()
+        # Keep the same _gid — the consumer group will reconnect
+        await self.start()
+
     def _spawn(self, coro):
         t = asyncio.create_task(coro)
         self._tasks.add(t)

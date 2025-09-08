@@ -13,6 +13,8 @@ All tests rely on in-memory Kafka and DB, configured via fixtures from `conftest
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from typing import Any
 
 import pytest
@@ -460,3 +462,204 @@ async def test_metrics_idempotent_on_duplicate_status_events(
     got = _get_count(tdoc, "d")
     dbg("METRICS.DEDUP", expect=total, got=got)
     assert got == total
+
+
+@pytest.mark.asyncio
+async def test_status_out_of_order_does_not_break_aggregation(
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+):
+    """
+    BATCH_OK STATUS events arrive out of order → the aggregated metric remains correct.
+    We hold the first BATCH_OK so later ones arrive first.
+    """
+    cd, _ = env_and_imports
+
+    # Slightly slow batches so TASK_DONE arrives after the delayed BATCH_OK.
+    monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.2")
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
+
+    # Intercept producer: hold the first BATCH_OK and re-inject it via the broker later.
+    orig_send = AIOKafkaProducerMock.send_and_wait
+    state = {"held_once": False}
+
+    async def out_of_order(self, topic, value, key=None):
+        payload = (value or {}).get("payload") or {}
+        if (
+            topic.startswith("status.")
+            and (value or {}).get("msg_type") == "event"
+            and payload.get("kind") == "BATCH_OK"
+            and not state["held_once"]
+        ):
+            state["held_once"] = True
+
+            async def later():
+                await asyncio.sleep(0.15)
+                await BROKER.produce(topic, value)
+
+            # Keep a reference to satisfy RUF006 and prevent GC of the task.
+            state["delayed_task"] = asyncio.create_task(later())
+            # Optional: clean up the reference when done
+            state["delayed_task"].add_done_callback(lambda _t: state.pop("delayed_task", None))
+            return  # suppress original send; delayed one will be re-injected via BROKER
+
+        return await orig_send(self, topic, value, key)
+
+    monkeypatch.setattr("tests.helpers.kafka.AIOKafkaProducerMock.send_and_wait", out_of_order, raising=True)
+
+    total, batch = 12, 4  # 3 batches
+    u = _make_indexer("u", total=total, batch=batch)
+    d = {
+        "node_id": "d",
+        "type": "analyzer",
+        "depends_on": ["u"],
+        "fan_in": "all",
+        "io": {
+            "start_when": "first_batch",
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+            },
+        },
+        "status": None,
+        "attempt_epoch": 0,
+    }
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
+    graph = prime_graph(cd, graph)
+
+    task_id = await coord.create_task(params={}, graph=graph)
+    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+    got = _get_count(tdoc, "d")
+    dbg("METRICS.OOO", expect=total, got=got)
+    assert got == total
+
+
+@pytest.mark.asyncio
+async def test_metrics_dedup_persists_across_coord_restart(
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+):
+    """
+    Metric deduplication survives a coordinator restart: duplicates of STATUS
+    (BATCH_OK/TASK_DONE) sent during the restart must not double-count.
+    Skips if the fixture `coord` has no `restart` method.
+    """
+    cd, _ = env_and_imports
+
+    restart_fn = getattr(coord, "restart", None)
+    if restart_fn is None:
+        pytest.skip("Coordinator restart is not supported by this fixture")
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
+
+    orig_send = AIOKafkaProducerMock.send_and_wait
+    fired = {"restarted": False}
+
+    async def dup_and_restart(self, topic, value, key=None):
+        payload = (value or {}).get("payload") or {}
+        # (1) On the first BATCH_OK, restart the coordinator.
+        # (2) Always send the original.
+        # (3) Inject a duplicate STATUS to verify dedup after restart.
+        if (
+            not fired["restarted"]
+            and topic.startswith("status.")
+            and (value or {}).get("msg_type") == "event"
+            and payload.get("kind") == "BATCH_OK"
+        ):
+            fired["restarted"] = True
+            if inspect.iscoroutinefunction(restart_fn):
+                await restart_fn()  # soft restart
+            else:
+                restart_fn()
+
+        await orig_send(self, topic, value, key)
+        if topic.startswith("status.") and (value or {}).get("msg_type") == "event":
+            kind = (payload or {}).get("kind") or ""
+            if kind in ("BATCH_OK", "TASK_DONE"):
+                await BROKER.produce(topic, value)
+
+    monkeypatch.setattr("tests.helpers.kafka.AIOKafkaProducerMock.send_and_wait", dup_and_restart, raising=True)
+
+    total, batch = 18, 6  # 3 batches
+    u = _make_indexer("u", total=total, batch=batch)
+    d = {
+        "node_id": "d",
+        "type": "analyzer",
+        "depends_on": ["u"],
+        "fan_in": "all",
+        "io": {
+            "start_when": "first_batch",
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 25},
+            },
+        },
+        "status": None,
+        "attempt_epoch": 0,
+    }
+    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
+    graph = prime_graph(cd, graph)
+
+    task_id = await coord.create_task(params={}, graph=graph)
+    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
+    got = _get_count(tdoc, "d")
+    dbg("METRICS.DEDUP.RESTART", expect=total, got=got)
+    assert got == total
+
+
+@pytest.mark.asyncio
+async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
+    """
+    Two concurrent tasks (same node_ids across different task_ids) do not interfere:
+    final 'count' values are isolated per task.
+    """
+    cd, _ = env_and_imports
+
+    # Slow down slightly to force overlap in execution.
+    monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.1")
+
+    await worker_factory(
+        ("indexer", build_indexer_handler(db=inmemory_db)),
+        ("analyzer", build_analyzer_handler(db=inmemory_db)),
+    )
+
+    def build_graph(total: int, batch: int):
+        u = _make_indexer("u", total=total, batch=batch)
+        d = {
+            "node_id": "d",
+            "type": "analyzer",
+            "depends_on": ["u"],
+            "fan_in": "all",
+            "io": {
+                "start_when": "first_batch",
+                "input_inline": {
+                    "input_adapter": "pull.from_artifacts",
+                    "input_args": {"from_nodes": ["u"], "poll_ms": 20},
+                },
+            },
+            "status": None,
+            "attempt_epoch": 0,
+        }
+        g = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
+        return g
+
+    g1 = prime_graph(cd, build_graph(15, 5))
+    g2 = prime_graph(cd, build_graph(21, 4))
+
+    # Start both tasks back-to-back to ensure real overlap on topics.
+    t1 = await coord.create_task(params={}, graph=g1)
+    t2 = await coord.create_task(params={}, graph=g2)
+
+    doc1 = await wait_task_finished(inmemory_db, t1, timeout=14.0)
+    doc2 = await wait_task_finished(inmemory_db, t2, timeout=14.0)
+
+    c1 = _get_count(doc1, "d")
+    c2 = _get_count(doc2, "d")
+    dbg("METRICS.CROSSTALK", t1=t1, c1=c1, t2=t2, c2=c2)
+    assert c1 == 15
+    assert c2 == 21
