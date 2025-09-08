@@ -63,7 +63,8 @@ class KafkaBus:
 
     # ---- raw send (used by OutboxDispatcher)
     async def _raw_send(self, topic: str, key: bytes, env: Envelope) -> None:
-        assert self._producer is not None
+        if self._producer is None:
+            raise RuntimeError("KafkaBus producer is not initialized")
         await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)
 
     # ---- replies

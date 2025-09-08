@@ -203,13 +203,15 @@ class Worker:
 
     # ---------- Kafka send helpers ----------
     async def _send_status(self, role: str, env: Envelope) -> None:
-        assert self._producer is not None
+        if self._producer is None:
+            raise RuntimeError("KafkaBus producer is not initialized")
         topic = self.cfg.topic_status(role)
         key = f"{env.task_id}:{env.node_id}".encode()
         await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)
 
     async def _send_announce(self, kind: EventKind, extra: dict[str, Any]) -> None:
-        assert self._producer is not None
+        if self._producer is None:
+            raise RuntimeError("KafkaBus producer is not initialized")
         payload = {"kind": kind, **extra}
         now_ms = self.clock.now_ms()
         env = Envelope(
@@ -226,7 +228,8 @@ class Worker:
         await self._producer.send_and_wait(self.cfg.topic_worker_announce, env.model_dump(mode="json"))
 
     async def _send_reply(self, env: Envelope) -> None:
-        assert self._producer is not None
+        if self._producer is None:
+            raise RuntimeError("KafkaBus producer is not initialized")
         key = (env.task_id or "*").encode("utf-8")
         await self._producer.send_and_wait(self.cfg.topic_reply, env.model_dump(mode="json"), key=key)
 
