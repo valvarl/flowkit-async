@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # mike пушит в gh-pages
+  contents: write
 
 concurrency:
   group: "pages-mike"
@@ -21,7 +21,20 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
+
+      - name: Use SSH deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GH_PAGES_DEPLOY_KEY }}
+
+      - name: Point origin to SSH remote
+        run: |
+          git remote set-url origin "git@github.com:${{ github.repository }}.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # на всякий случай подтянем теги
+          git fetch --tags --force --prune
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -35,26 +48,22 @@ jobs:
           pip install -e .
           pip install mkdocs mkdocs-material mkdocstrings[python] ruff mike
 
-      - name: Configure git user for mike
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Build check (strict)
         run: mkdocs build --clean --strict
 
-      # Snapshot main → "dev" version (no alias latest)
+      # Snapshot main → "dev" (без latest)
       - name: Deploy dev (main)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
-          mike deploy --push --branch gh-pages dev
-          mike set-default --push latest || true
+          mike deploy --push --remote origin --branch gh-pages dev
+          # default оставим latest — установится/переустановится на релизе
+          mike set-default --push --remote origin latest || true
 
-      # Tag release → version = tag name, update alias latest
+      # Tag release → версия = имя тега, alias latest обновляется
       - name: Deploy release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAG: ${{ github.ref_name }}   # e.g. v1.2.3
         run: |
-          mike deploy --push --branch gh-pages "${TAG}" latest
-          mike set-default --push latest
+          mike deploy --push --remote origin --branch gh-pages "${TAG}" latest
+          mike set-default --push --remote origin latest
