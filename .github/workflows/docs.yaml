@@ -33,7 +33,6 @@ jobs:
           git remote set-url origin "git@github.com:${{ github.repository }}.git"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # на всякий случай подтянем теги
           git fetch --tags --force --prune
 
       - name: Setup Python
@@ -51,15 +50,17 @@ jobs:
       - name: Build check (strict)
         run: mkdocs build --clean --strict
 
-      # Snapshot main → "dev" (без latest)
+      # Пуш в main/master → обновляем dev.
+      # Если дефолт ещё не задан (первая публикация), временно выставляем dev.
       - name: Deploy dev (main)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           mike deploy --push --remote origin --branch gh-pages dev
-          # default оставим latest — установится/переустановится на релизе
-          mike set-default --push --remote origin latest || true
+          if ! mike show-default >/dev/null 2>&1; then
+            mike set-default --push --remote origin dev
+          fi
 
-      # Tag release → версия = имя тега, alias latest обновляется
+      # Релизный тег → выкладываем версию и алиас latest, и делаем latest дефолтом.
       - name: Deploy release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
