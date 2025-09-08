@@ -734,7 +734,11 @@ class Coordinator:
                 pass
         if p.artifacts_ref:
             await self.db.artifacts.update_one(
-                {"task_id": env.task_id, "node_id": env.node_id},
+                {
+                    "task_id": env.task_id,
+                    "node_id": env.node_id,
+                    "batch_uid": {"$exists": False},
+                },
                 {
                     "$set": {"status": "complete", "meta": p.metrics or {}, "updated_at": self.clock.now_dt()},
                     "$setOnInsert": {

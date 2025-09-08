@@ -30,6 +30,23 @@ class InMemCollection:
                 return None
         return cur
 
+    @staticmethod
+    def _has_path(doc, path: str) -> bool:
+        cur = doc
+        for p in path.split("."):
+            if isinstance(cur, list) and p.isdigit():
+                idx = int(p)
+                if idx >= len(cur):
+                    return False
+                cur = cur[idx]
+            elif isinstance(cur, dict):
+                if p not in cur:
+                    return False
+                cur = cur[p]
+            else:
+                return False
+        return True
+
     def _match(self, doc, flt):
         from enum import Enum
 
@@ -95,6 +112,11 @@ class InMemCollection:
                 pass
 
             if isinstance(v, dict):
+                if "$exists" in v:
+                    want = bool(v["$exists"])
+                    present = self._has_path(doc, k)
+                    if present != want:
+                        return False
                 if "$in" in v:
                     in_list = [x.value if hasattr(x, "value") else x for x in v["$in"]]
                     if val not in in_list:
