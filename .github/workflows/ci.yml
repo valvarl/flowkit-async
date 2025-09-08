@@ -194,12 +194,14 @@ jobs:
             "pytest-repeat>=0.9" \
             "pytest-timeout>=2.3" \
             "pytest-randomly>=3.15" \
-            "pytest-cov>=4.1"
+            "pytest-cov>=4.1" \
+            "pytest-xdist>=3.6"
 
       - name: Run tests + Coverage
         run: |
           mkdir -p reports
           pytest tests \
+            -n auto --dist=loadfile \
             --count=10 \
             --maxfail=0 \
             -ra -vv \
