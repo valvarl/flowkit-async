@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "flowkit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Flow orchestration toolkit: coordinator/worker with Kafka backplane"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -135,3 +135,15 @@ source = ["flowkit"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+[tool.setuptools_scm]
+# Когда сидим между релизами, версия будет вида 0.1.0.devN+gHASH
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+
+# Сгенерируем файл с версией (удобно для рантайма)
+write_to = "src/flowkit/_version.py"
+write_to_template = "__all__ = ['__version__']\n__version__ = '{version}'\n"
+
+# На всякий случай (если вдруг нет git или тегов)
+fallback_version = "0.0.0"
