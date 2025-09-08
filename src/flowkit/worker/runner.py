@@ -29,7 +29,7 @@ from .context import RunContext
 from .handlers.base import Batch, BatchResult, RoleHandler
 from .handlers.echo import EchoHandler
 from .input.pull_adapters import build_input_adapters
-from .state import ActiveRun, LocalState
+from .state import ActiveRun, LocalStateManager
 
 
 def _json_log(clock: Clock, **kv: Any) -> None:
@@ -43,7 +43,7 @@ class Worker:
     - Kafka I/O (producers/consumers per role)
     - Discovery (TASK_DISCOVER → TASK_SNAPSHOT)
     - Control-plane CANCEL via signals topic
-    - Local JSON state for resume hints
+    - DB-backed state for resume/takeover
     """
 
     def __init__(
@@ -86,8 +86,8 @@ class Worker:
         self._cancel_meta: dict[str, Any] = {"reason": None, "deadline_ts_ms": None}
         self._stopping = False
 
-        self.state = LocalState(self.cfg, self.clock)
-        self.active: ActiveRun | None = self.state.read_active()
+        self.state = LocalStateManager(db=self.db, clock=self.clock, worker_id=self.worker_id)
+        self.active: ActiveRun | None = None
 
         # dedup of command envelopes
         self._dedup: OrderedDict[str, int] = OrderedDict()
@@ -103,6 +103,7 @@ class Worker:
         )
         await self._producer.start()
 
+        await self.state.refresh()
         self.active = self.state.read_active()
         if self.active and self.active.step_type not in self.cfg.roles:
             self.active = None
@@ -849,6 +850,11 @@ class Worker:
                 [("task_id", 1), ("consumer_node", 1), ("from_node", 1), ("batch_uid", 1)],
                 unique=True,
                 name="uniq_stream_claim_batch",
+            )
+            await self.db.worker_state.create_index(
+                [("updated_at", 1)],
+                expireAfterSeconds=7 * 24 * 3600,
+                name="ttl_worker_state_updated_at",
             )
         except Exception:
             pass

@@ -55,7 +55,15 @@ jobs:
       - name: Deploy dev (main)
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
+          set +e
           mike deploy --push --remote origin --branch gh-pages dev
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "mike: no changes for dev — skipping commit."
+          fi
+          set -e
+
+          # Если дефолт ещё не задан (самая первая публикация), укажем dev
           if ! mike show-default >/dev/null 2>&1; then
             mike set-default --push --remote origin dev
           fi
