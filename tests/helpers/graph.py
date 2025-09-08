@@ -11,9 +11,15 @@ from .util import dbg
 
 
 def prime_graph(cd, graph: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize graph nodes before submitting to the coordinator:
+    - ensure status is set to queued (supports both enum and raw string)
+    - ensure attempt_epoch/stats/lease are present
+    """
     for n in graph.get("nodes", []):
         st = n.get("status")
         if st is None or (isinstance(st, str) and not st.strip()):
+            # Support tests where RunState may be an enum on `cd`, or just strings.
             n["status"] = getattr(cd, "RunState", type("RS", (), {"queued": "queued"})).queued
         n.setdefault("attempt_epoch", 0)
         n.setdefault("stats", {})
@@ -22,11 +28,15 @@ def prime_graph(cd, graph: dict[str, Any]) -> dict[str, Any]:
 
 
 async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[str, Any]:  # noqa: ASYNC109
-    t0 = time.time()
+    """
+    Wait until the whole task reaches RunState.finished.
+    Logs periodic progress for debugging.
+    """
+    t0 = time.monotonic()
     last_log = 0.0
-    while time.time() - t0 < timeout:
+    while time.monotonic() - t0 < timeout:
         t = await db.tasks.find_one({"id": task_id})
-        now = time.time()
+        now = time.monotonic()
         if now - last_log >= 0.5:
             if t:
                 st = t.get("status")
@@ -35,61 +45,74 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[st
             else:
                 dbg("WAIT.PROGRESS", info="task_not_found_yet")
             last_log = now
-        if t and t.get("status") == RunState.finished:
+        if t and (t.get("status") == RunState.finished or str(t.get("status", "")).endswith("finished")):
             dbg("WAIT.DONE")
             return t
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.03)
     raise AssertionError("task not finished in time")
 
 
 async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0):  # noqa: ASYNC109
     """
-    Poll the task document until a specific node reaches the 'running' state.
-    Returns the latest task snapshot. Raises on timeout.
-    """
-    from time import time
+    Wait until a node has *actually* started:
+      - `started_at` is present OR
+      - `attempt_epoch` > 0 OR
+      - status is 'running' OR the node already finished (fast path).
 
-    t0 = time()
-    while time() - t0 < timeout:
+    This avoids flakes when nodes run and finish between polling intervals.
+    """
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
         doc = await db.tasks.find_one({"id": task_id})
         if doc:
-            st = (node_by_id(doc, node_id) or {}).get("status")
-            if str(st).endswith("running"):
-                return doc
-        await asyncio.sleep(0.02)
+            nodes = (doc.get("graph", {}) or {}).get("nodes") or []
+            n = next((x for x in nodes if x.get("node_id") == node_id), None)
+            if n:
+                st = str(n.get("status") or "")
+                started = bool(n.get("started_at")) or int(n.get("attempt_epoch") or 0) > 0
+                if started or st.endswith("running") or st.endswith("finished"):
+                    return doc
+        await asyncio.sleep(0.01)  # tighter polling to catch short running windows
     raise AssertionError(f"node {node_id} not running in time")
 
 
 async def wait_node_not_running_for(db, task_id: str, node_id: str, hold: float = 0.6) -> None:
     """
-    Ensure that a node does NOT enter 'running' within a small hold window.
-    Useful for negative checks when downstream must wait for upstream completion.
-    """
-    from time import time
+    Ensure that a node does NOT start within a small hold window.
 
-    t0 = time()
-    seen_running = False
-    while time() - t0 < hold:
+    We treat the node as "started" if *any* of these is true:
+      - status is 'running' or 'finished'
+      - `started_at` is present
+      - `attempt_epoch` > 0
+    """
+    t0 = time.monotonic()
+    seen_started = False
+    while time.monotonic() - t0 < hold:
         doc = await db.tasks.find_one({"id": task_id})
         n = node_by_id(doc or {}, node_id)
-        st = n.get("status") if n else None
-        if str(st).endswith("running"):
-            seen_running = True
-            break
-        await asyncio.sleep(0.03)
-    assert not seen_running, f"{node_id} unexpectedly started during hold window"
+        if n:
+            st = str(n.get("status") or "")
+            started = (
+                st.endswith("running")
+                or st.endswith("finished")
+                or bool(n.get("started_at"))
+                or int(n.get("attempt_epoch") or 0) > 0
+            )
+            if started:
+                seen_started = True
+                break
+        await asyncio.sleep(0.02)
+    assert not seen_started, f"{node_id} unexpectedly started during hold window"
 
 
 async def wait_node_finished(db, task_id: str, node_id: str, timeout: float = 8.0):  # noqa: ASYNC109
     """
-    Poll the task document until a specific node reaches the 'finished' state.
-    Returns the latest task snapshot. Raises on timeout.
+    Wait until a specific node reaches the 'finished' state.
+    Returns the latest task snapshot. Raises on timeout (with last observed status).
     """
-    from time import time
-
-    t0 = time()
+    t0 = time.monotonic()
     last_doc = None
-    while time() - t0 < timeout:
+    while time.monotonic() - t0 < timeout:
         doc = await db.tasks.find_one({"id": task_id})
         if doc:
             last_doc = doc
@@ -115,16 +138,16 @@ def node_by_id(doc: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
 
 async def wait_task_status(db, task_id: str, want: str, timeout: float = 6.0):  # noqa: ASYNC109
     """
-    Poll task doc until its status equals `want`, or raise if deadline exceeded.
+    Wait until task status equals `want` (string-endswith compatible).
     """
-    from time import time
-
-    t0 = time()
-    while time() - t0 < timeout:
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
         t = await db.tasks.find_one({"id": task_id})
-        if t and str(t.get("status")) == want:
-            return t
-        await asyncio.sleep(0.03)
+        if t:
+            st = str(t.get("status") or "")
+            if st == want or st.endswith(want):
+                return t
+        await asyncio.sleep(0.02)
     raise AssertionError(f"task not reached status={want} in time")
 
 
