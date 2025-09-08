@@ -62,11 +62,20 @@ repos:
         stages: [pre-push]
         pass_filenames: false
 
-  # Core sanity hooks
+  # YAML → yamllint вместо check-yaml
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        name: yamllint (yaml)
+        args: ['-c', '.yamllint.yaml']
+        types: [yaml]
+        exclude: ^(site/|site_artifacts/)
+
+  # Core sanity hooks (без check-yaml)
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      - id: check-yaml
       - id: check-toml
       - id: check-json
       - id: end-of-file-fixer

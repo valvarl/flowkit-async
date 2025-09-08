@@ -1,0 +1,21 @@
+extends: default
+
+ignore: |
+  site/**
+  site_artifacts/**
+
+rules:
+  document-start: disable
+  truthy: disable
+  line-length:
+    max: 140
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  indentation:
+    indent-sequences: consistent
+    spaces: 2
+  empty-lines:
+    max: 2
+    max-start: 0
+  comments:
+    require-starting-space: true

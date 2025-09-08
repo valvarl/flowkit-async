@@ -1,0 +1,136 @@
+site_name: FlowKit
+site_description: Flow orchestration toolkit - coordinator/worker with Kafka backplane
+site_author: FlowKit authors
+site_url: https://valvarl.github.io/flowkit-async
+
+repo_name: flowkit-async
+repo_url: https://github.com/valvarl/flowkit-async
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  font:
+    text: Roboto
+    code: Roboto Mono
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+      - Basic Concepts: getting-started/concepts.md
+  - User Guide:
+      - Coordinators: guide/coordinators.md
+      - Workers: guide/workers.md
+      - Task Graphs: guide/graphs.md
+      - Configuration: guide/configuration.md
+      - Error Handling: guide/error-handling.md
+  - API Reference:
+      - Core: reference/core.md
+      - Coordinator: reference/coordinator.md
+      - Worker: reference/worker.md
+      - Protocol: reference/protocol.md
+      - Bus: reference/bus.md
+      - Testing: reference/testing.md
+  - Examples:
+      - Simple Pipeline: examples/simple-pipeline.md
+      - Complex Workflows: examples/complex-workflows.md
+      - Testing Scenarios: examples/testing.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Testing: development/testing.md
+      - Architecture: development/architecture.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            members_order: source
+            show_root_heading: true
+            show_source: true
+            show_category_heading: true
+            merge_init_into_class: true
+            show_signature_annotations: true
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - codehilite:
+      guess_lang: false
+  - def_list
+  - footnotes
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/valvarl/flowkit-async
+  version:
+    provider: mike
