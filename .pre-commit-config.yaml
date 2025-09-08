@@ -14,7 +14,6 @@ exclude: |
   )$
 
 repos:
-  # Ruff: lint + isort autofix
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.12.11
     hooks:
@@ -23,14 +22,12 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
         files: ^(src|tests)/.*\.py$
 
-  # Black: single source of truth for formatting
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:
       - id: black
         files: ^(src|tests)/.*\.py$
 
-  # MyPy: reads config from pyproject [tool.mypy]
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.17.1
     hooks:
@@ -40,7 +37,6 @@ repos:
         additional_dependencies:
           - types-setuptools
 
-  # Bandit: security linter (pre-push)
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.6
     hooks:
@@ -50,19 +46,16 @@ repos:
         stages: [pre-push]
         pass_filenames: false
 
-  # pip-audit: project deps only (pre-push), isolated in hook venv
   - repo: local
     hooks:
       - id: pip-audit
         name: pip-audit (project deps only, pre-push)
         language: python
-        additional_dependencies:
-          - pip-audit
+        additional_dependencies: [pip-audit]
         entry: bash -lc 'pip install -q -e .[dev] || pip install -q -e .; pip-audit'
         stages: [pre-push]
         pass_filenames: false
 
-  # YAML → yamllint вместо check-yaml
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.35.1
     hooks:
@@ -72,14 +65,26 @@ repos:
         types: [yaml]
         exclude: ^(site/|site_artifacts/)
 
-  # Core sanity hooks (без check-yaml)
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: check-toml
       - id: check-json
+      - id: check-ast
+      - id: debug-statements
+      - id: check-merge-conflict
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: mixed-line-ending
       - id: detect-private-key
       - id: check-added-large-files
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+
+  # Опционально - орфография в доках
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+        exclude: ^(site/|site_artifacts/)
