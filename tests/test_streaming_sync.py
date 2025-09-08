@@ -22,6 +22,7 @@ from tests.helpers.graph import (
     make_graph,
     node_by_id,
     prime_graph,
+    wait_node_finished,
     wait_node_not_running_for,
     wait_node_running,
     wait_task_finished,
@@ -120,45 +121,52 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
 
 
 @pytest.mark.asyncio
-async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
     """
-    Without `start_when`, downstream must not start until upstream completes.
+    Without start_when, the downstream must not start until the upstream is fully finished.
+    We first assert a negative hold window while the upstream is running, then assert the
+    downstream starts and finishes after the upstream completes.
     """
     cd, _ = env_and_imports
 
+    # Slow down indexer batch processing: 2 batches x ~0.45s ~= 0.9s total
+    monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.45")
+
+    # Start workers
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
 
-    u = _make_indexer("u", total=10, batch=5)  # noticeable running window
+    # u: emits 10 SKUs in 2 batches of 5; d depends on u; no start_when
+    u = _make_indexer("u", total=10, batch=5)
     d = {
         "node_id": "d",
         "type": "analyzer",
         "depends_on": ["u"],
-        "fan_in": "all",
+        "fan_in": "all",  # wait for u to fully complete
         "io": {
-            "input_inline": {"input_adapter": "pull.from_artifacts", "input_args": {"from_nodes": ["u"], "poll_ms": 30}}
+            # Adapter is not essential for the assertion, but we keep a realistic artifacts-pull path.
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 30},
+            }
         },
         "status": None,
         "attempt_epoch": 0,
     }
 
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")])
-    graph = prime_graph(cd, graph)
-
+    graph = prime_graph(cd, make_graph(nodes=[u, d], edges=[("u", "d")]))
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("T.AFTERCOMP.CREATED", task_id=task_id)
 
-    # Ensure the downstream does NOT start during the hold window.
-    await wait_node_not_running_for(inmemory_db, task_id, "d", hold=0.8)
+    # 1) While u is still running (~0.9s), d must NOT enter running (hold < u duration).
+    await wait_node_not_running_for(inmemory_db, task_id, "d", hold=0.5)
 
-    # Then everything should finish.
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("AFTERCOMP.FINAL", statuses=final)
-    assert final["u"] == cd.RunState.finished
-    assert final["d"] == cd.RunState.finished
+    # 2) Wait until u finished.
+    await wait_node_finished(inmemory_db, task_id, "u", timeout=3.0)
+
+    # 3) Now d should start and quickly finish.
+    await wait_node_finished(inmemory_db, task_id, "d", timeout=2.0)
 
 
 @pytest.mark.asyncio

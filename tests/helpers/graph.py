@@ -80,6 +80,27 @@ async def wait_node_not_running_for(db, task_id: str, node_id: str, hold: float 
     assert not seen_running, f"{node_id} unexpectedly started during hold window"
 
 
+async def wait_node_finished(db, task_id: str, node_id: str, timeout: float = 8.0):  # noqa: ASYNC109
+    """
+    Poll the task document until a specific node reaches the 'finished' state.
+    Returns the latest task snapshot. Raises on timeout.
+    """
+    from time import time
+
+    t0 = time()
+    last_doc = None
+    while time() - t0 < timeout:
+        doc = await db.tasks.find_one({"id": task_id})
+        if doc:
+            last_doc = doc
+            st = (node_by_id(doc, node_id) or {}).get("status")
+            if str(st).endswith("finished"):
+                return doc
+        await asyncio.sleep(0.02)
+    last_status = (node_by_id(last_doc or {}, node_id) or {}).get("status") if last_doc else None
+    raise AssertionError(f"node {node_id} not finished in time (last_status={last_status})")
+
+
 def node_by_id(doc: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
     """
     Return node document from task snapshot by node_id, or {} if not found.
