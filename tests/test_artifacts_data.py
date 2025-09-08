@@ -14,12 +14,12 @@ pytestmark = pytest.mark.worker_types("indexer,analyzer")
 # ───────────────────────── Graph builders ─────────────────────────
 
 
-def graph_partial_and_collect(*, total: int, batch_size: int, rechunk: int) -> dict:
+def graph_partial_and_collect(*, total: int, batch_size: int, rechunk: int, aggregate: bool = True) -> dict:
     """
     w1=indexer -> w2=analyzer (reads via pull.from_artifacts.rechunk:size).
     Analyzer counts items; we will assert via node.stats.
     """
-    return {
+    g = {
         "schema_version": "1.0",
         "nodes": [
             {
@@ -47,6 +47,18 @@ def graph_partial_and_collect(*, total: int, batch_size: int, rechunk: int) -> d
         "edges": [["w1", "w2"]],
         "edges_ex": [{"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"}],
     }
+    if aggregate:
+        g["nodes"].append(
+            {
+                "node_id": "agg_w2",
+                "type": "coordinator_fn",
+                "depends_on": ["w2"],
+                "fan_in": "all",
+                "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "w2", "mode": "sum"}},
+            }
+        )
+        g["edges"].append(["w2", "agg_w2"])
+    return g
 
 
 def graph_merge_generic() -> dict:

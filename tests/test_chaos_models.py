@@ -305,7 +305,7 @@ async def test_chaos_worker_restart_mid_stream(env_and_imports, inmemory_db, coo
         # stop
         await workers["w2"].stop()
         # start a new instance of same role/handlers
-        new_w2 = wu.Worker(roles=["enricher"], handlers={"enricher": workers["handlers"]["enricher"]})
+        new_w2 = wu.Worker(db=inmemory_db, roles=["enricher"], handlers={"enricher": workers["handlers"]["enricher"]})
         await new_w2.start()
         workers["w2"] = new_w2  # ensure teardown stops the new one
 

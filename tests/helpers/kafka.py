@@ -144,7 +144,7 @@ class InMemKafkaBroker:
         else:
             duplicate = False
 
-        dbg("KAFKA.PRODUCE", topic=topic, msg_type=msg_type, kind=kind)
+        # dbg("KAFKA.PRODUCE", topic=topic, msg_type=msg_type, kind=kind)
 
         deliveries = 2 if duplicate else 1
         for i in range(deliveries):

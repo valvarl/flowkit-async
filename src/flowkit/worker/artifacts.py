@@ -1,4 +1,4 @@
-from __future__ import annotations
+# worker/artifacts.py
 
 from typing import Any
 
@@ -17,6 +17,7 @@ class ArtifactsWriter:
     async def upsert_partial(self, batch_uid: str, meta: dict[str, Any]) -> dict[str, Any]:
         if not batch_uid:
             raise ValueError("batch_uid is required for partial artifact")
+
         filt = {"task_id": self.task_id, "node_id": self.node_id, "batch_uid": batch_uid}
         await self.db.artifacts.update_one(
             filt,
@@ -28,12 +29,12 @@ class ArtifactsWriter:
                     "status": "partial",
                     "worker_id": self.worker_id,
                     "payload": None,
+                    "batch_uid": batch_uid,
                     "created_at": self.clock.now_dt(),
                 },
                 "$set": {
                     "status": "partial",
                     "meta": meta or {},
-                    "batch_uid": batch_uid,
                     "updated_at": self.clock.now_dt(),
                 },
             },
@@ -43,10 +44,12 @@ class ArtifactsWriter:
 
     async def mark_complete(self, meta: dict[str, Any], artifacts_ref: dict[str, Any] | None = None) -> dict[str, Any]:
         await self.db.artifacts.update_one(
-            {"task_id": self.task_id, "node_id": self.node_id},
+            {"task_id": self.task_id, "node_id": self.node_id, "batch_uid": {"$exists": False}},
             {
-                "$set": {"status": "complete", "meta": meta, "updated_at": self.clock.now_dt()},
+                "$set": {"status": "complete", "meta": meta or {}, "updated_at": self.clock.now_dt()},
                 "$setOnInsert": {
+                    "task_id": self.task_id,
+                    "node_id": self.node_id,
                     "attempt_epoch": self.attempt_epoch,
                     "worker_id": self.worker_id,
                     "created_at": self.clock.now_dt(),
