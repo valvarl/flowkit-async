@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#development-testing-wip" class="md-skip">
+        <a href="#test-suite-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -1166,6 +1166,19 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Testing
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1177,6 +1190,49 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#writing-good-test-docstrings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Writing good test docstrings
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1233,6 +1289,38 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#writing-good-test-docstrings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Writing good test docstrings
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1250,8 +1338,22 @@
   
 
 
-<h1 id="development-testing-wip">Development: Testing (WIP)<a class="headerlink" href="#development-testing-wip" title="Permanent link">&para;</a></h1>
-<p>How to run tests locally, coverage, flakes. <em>Placeholder.</em></p>
+<h1 id="test-suite-reference">Test Suite Reference<a class="headerlink" href="#test-suite-reference" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>This page is generated from pytest docstrings at build time.
+If you see this placeholder, enable the generator plugin and rebuild docs.</p>
+</blockquote>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<p>We use <strong>mkdocs-gen-files</strong> to scan <code>tests/</code> and pull docstrings from test modules, classes, and functions,
+then render them as documentation. See <code>docs/_scripts/gen_tests_doc.py</code>.</p>
+<h3 id="writing-good-test-docstrings">Writing good test docstrings<a class="headerlink" href="#writing-good-test-docstrings" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_example</span><span class="p">():</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">    Brief summary explaining what the test validates and why.</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">    Mention key behaviors, invariants, or failure modes.</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="o">...</span>
+</span></code></pre></div>
 
 
 

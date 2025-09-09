@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#contributing-wip" class="md-skip">
+        <a href="#contributing-to-flowkitasync" class="md-skip">
           Skip to content
         </a>
       
@@ -1143,6 +1143,19 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Contributing
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1154,6 +1167,214 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tldr-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      TL;DR checklist
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Local setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#useful-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Useful commands
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#branching-commits-and-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Branching, commits, and PRs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code style
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code style">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docstrings-google-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docstrings: Google style
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typing-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Typing policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatting-linting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Formatting &amp; linting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Logging
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-cancellation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Async &amp; cancellation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tests
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick start
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conventions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coverage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-what-must-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI (what must pass)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Documentation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security &amp; secrets
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles-projectspecific" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design principles (project‑specific)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting help
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1233,6 +1454,203 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tldr-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      TL;DR checklist
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Local setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#useful-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Useful commands
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#branching-commits-and-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Branching, commits, and PRs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code style
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code style">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#docstrings-google-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docstrings: Google style
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#typing-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Typing policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#formatting-linting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Formatting &amp; linting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Logging
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-cancellation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Async &amp; cancellation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tests
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick start
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conventions
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coverage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-what-must-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      CI (what must pass)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Documentation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security &amp; secrets
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles-projectspecific" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design principles (project‑specific)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting help
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1250,8 +1668,159 @@
   
 
 
-<h1 id="contributing-wip">Contributing (WIP)<a class="headerlink" href="#contributing-wip" title="Permanent link">&para;</a></h1>
-<p>Docstring style (Google), typing policy, CI rules. <em>Placeholder.</em></p>
+<h1 id="contributing-to-flowkitasync">Contributing to FlowKit‑Async<a class="headerlink" href="#contributing-to-flowkitasync" title="Permanent link">&para;</a></h1>
+<p>Thank you for taking the time to contribute! This guide sets the ground rules for code, tests, docs, and CI so that changes stay reliable and fast.</p>
+<blockquote>
+<p>Short on time? See the <strong>TL;DR checklist</strong> below.</p>
+</blockquote>
+<hr />
+<h2 id="tldr-checklist">TL;DR checklist<a class="headerlink" href="#tldr-checklist" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Use <strong>Python 3.11 or 3.12</strong>.</li>
+<li>Install dev deps: <code>pip install -e .[test]</code>.</li>
+<li>Run locally before pushing:</li>
+<li><code>ruff check src tests</code> (lint)</li>
+<li><code>black --check src tests</code> (format)</li>
+<li><code>mypy src</code> (types)</li>
+<li><code>pytest -n auto -q</code> (tests, parallel)</li>
+<li>Write <strong>Google‑style docstrings</strong> for public APIs; don’t duplicate types already in annotations.</li>
+<li>Prefer <strong>precise typing</strong> (<code>collections.abc</code>, <code>dict[str, Any]</code> only at edges).</li>
+<li>Async code must be <strong>cancellation‑safe</strong> and non‑blocking.</li>
+<li>Keep PRs <strong>small and focused</strong>; link issues; add tests &amp; docs.</li>
+</ul>
+<hr />
+<h2 id="local-setup">Local setup<a class="headerlink" href="#local-setup" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">source</span><span class="w"> </span>.venv/bin/activate<span class="w">            </span><span class="c1"># Windows: .venv\Scripts\activate</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>pip
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="o">[</span>test<span class="o">]</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># optional but recommended</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>pip<span class="w"> </span>install<span class="w"> </span>pre-commit<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>pre-commit<span class="w"> </span>install
+</span></code></pre></div>
+<h3 id="useful-commands">Useful commands<a class="headerlink" href="#useful-commands" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>ruff<span class="w"> </span>check<span class="w"> </span>src<span class="w"> </span>tests
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>black<span class="w"> </span>--check<span class="w"> </span>src<span class="w"> </span>tests
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>mypy<span class="w"> </span>src
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>pytest<span class="w"> </span>-n<span class="w"> </span>auto<span class="w"> </span>-q
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>pytest<span class="w"> </span>-n<span class="w"> </span>auto<span class="w"> </span>--count<span class="o">=</span><span class="m">10</span><span class="w"> </span>-q<span class="w">  </span><span class="c1"># stress/flakiness check</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>mkdocs<span class="w"> </span>serve<span class="w">                   </span><span class="c1"># docs preview on http://localhost:8000</span>
+</span></code></pre></div>
+<hr />
+<h2 id="branching-commits-and-prs">Branching, commits, and PRs<a class="headerlink" href="#branching-commits-and-prs" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Branch names: <code>feature/&lt;slug&gt;</code>, <code>fix/&lt;slug&gt;</code>, <code>chore/&lt;slug&gt;</code>.</li>
+<li>Keep PRs &lt; ~400 lines of diff when possible; split large changes.</li>
+<li>Reference issues (<code>Fixes #123</code>) and <strong>include tests</strong>.</li>
+<li>Commit messages: Conventional Commits <strong>recommended</strong> (not strictly required):</li>
+<li><code>feat(worker): cooperative cancellation for adapter</code></li>
+<li><code>fix(coordinator): fence duplicate lease renewals</code></li>
+<li><code>test(chaos): restart coordinator mid-stream</code></li>
+<li><code>docs(getting-started): clarify quickstart prerequisites</code></li>
+</ul>
+<hr />
+<h2 id="code-style">Code style<a class="headerlink" href="#code-style" title="Permanent link">&para;</a></h2>
+<h3 id="docstrings-google-style">Docstrings: Google style<a class="headerlink" href="#docstrings-google-style" title="Permanent link">&para;</a></h3>
+<p>Use Google‑style docstrings for public modules, classes, and functions. Don’t repeat types already expressed in annotations.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterable</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">stable_hash</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a content‑stable hex digest for an iterable of strings.</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="sd">    Args:</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="sd">        items: Strings to hash in order.</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="sd">    Returns:</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="sd">        Hexadecimal SHA1 digest.</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="o">...</span>
+</span></code></pre></div>
+<p>Sections you may use: <strong>Args</strong>, <strong>Returns</strong>, <strong>Raises</strong>, <strong>Yields</strong>, <strong>Examples</strong>, <strong>Notes</strong>. Keep docstrings concise and focused on behavior and invariants rather than implementation.</p>
+<h3 id="typing-policy">Typing policy<a class="headerlink" href="#typing-policy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Target <strong>Python 3.11+</strong> syntax (<code>list[str]</code>, <code>X | None</code>, <code>typing.Self</code>).</li>
+<li>Prefer <strong><code>collections.abc</code></strong> for abstract containers: <code>Iterable</code>, <code>Mapping</code>, <code>Sequence</code>.</li>
+<li>Use <code>dict[str, Any]</code> only at <strong>system boundaries</strong> (I/O, JSON, DB). Convert to typed structures internally.</li>
+<li>For protocol payloads and wire messages use <strong>Pydantic v2</strong> models (e.g., <code>Envelope</code>) to validate and serialize.</li>
+<li>For internal immutable data consider <code>@dataclass(frozen=True)</code>.</li>
+<li>Avoid <code>Any</code> unless there is a hard boundary. If used, document why.</li>
+<li>Always annotate <strong>async</strong> functions and <strong>return types</strong> explicitly.</li>
+</ul>
+<h3 id="formatting-linting">Formatting &amp; linting<a class="headerlink" href="#formatting-linting" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Black</strong> enforces formatting; <strong>Ruff</strong> enforces lint rules.</li>
+<li>Ruff is the source of truth for style checks; follow <code>ruff.toml</code> in the repo.</li>
+<li>Keep imports sorted (Ruff’s <code>I</code> rules) and avoid unused code (<code>F401</code>, etc.).</li>
+<li>Lines should generally be ≤ 120 characters (CI enforces lints; docs may be stricter).</li>
+</ul>
+<h3 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Prefer <strong>structured logs</strong>. Workers use <code>_json_log(clock, **kv)</code> for consistent, parseable output.</li>
+<li>Tests may use <code>tests.helpers.dbg()</code> for human‑readable traces.</li>
+</ul>
+<h3 id="async-cancellation">Async &amp; cancellation<a class="headerlink" href="#async-cancellation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Never block the event loop. Use <code>await</code> for I/O and <code>asyncio.to_thread</code> for CPU‑bound work (sparingly).</li>
+<li>Handle <code>asyncio.CancelledError</code> by <strong>propagating</strong> (re‑raise) unless you are performing cleanup.</li>
+<li>Long‑running loops must check <strong>cancel flags</strong> (<code>ctx.cancel_flag.is_set()</code>) and yield (<code>await asyncio.sleep(…)</code>).</li>
+<li>When catching broad exceptions, <strong>classify</strong> and surface them via handler error APIs (see <code>RoleHandler.classify_error</code>).</li>
+</ul>
+<hr />
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
+<p>We use <strong>pytest</strong> with asyncio, randomized order, and parallelism.</p>
+<h3 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pytest<span class="w"> </span>-n<span class="w"> </span>auto<span class="w"> </span>-q
+</span></code></pre></div>
+<h3 id="conventions">Conventions<a class="headerlink" href="#conventions" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Name files <code>test_*.py</code> and mark async tests with <code>@pytest.mark.asyncio</code>.</li>
+<li>Use the helpers in <code>tests.helpers</code>:</li>
+<li><strong>Graph helpers</strong>: <code>prime_graph</code>, <code>wait_task_finished</code>, <code>wait_node_running</code>, <code>node_by_id</code>.</li>
+<li><strong>In-memory DB &amp; bus</strong> fixtures for isolated tests.</li>
+<li>Chaos/resiliency scenarios are marked with <code>@pytest.mark.chaos</code> and may use small sleeps; keep them deterministic otherwise.</li>
+<li>Every new feature/change should include <strong>unit tests</strong>; integration/chaos tests as applicable.</li>
+</ul>
+<h3 id="coverage">Coverage<a class="headerlink" href="#coverage" title="Permanent link">&para;</a></h3>
+<p>Coverage is reported in CI. Try to keep coverage <strong>steady or improving</strong>; focus on critical paths (coordinator scheduling, worker heartbeats, adapters, and cancellation).</p>
+<hr />
+<h2 id="ci-what-must-pass">CI (what must pass)<a class="headerlink" href="#ci-what-must-pass" title="Permanent link">&para;</a></h2>
+<p>The repository ships a CI workflow that runs on Linux with Python <strong>3.11</strong> and <strong>3.12</strong>:</p>
+<ul>
+<li><strong>Lint</strong>: <code>ruff</code>, <code>black --check</code>, <code>mypy</code>.</li>
+<li><strong>Tests</strong>: <code>pytest -n auto --count=10</code> with timeouts and JUnit + coverage reports.</li>
+<li>Optional <strong>flake-hunt</strong> mode can repeat tests in random order to chase flakes.</li>
+<li>Docs build must succeed (<code>mkdocs build --strict</code>) in the docs workflow.</li>
+</ul>
+<p>If CI is red, please reproduce locally and push a fix or mark a flaky test with <code>@pytest.mark.flaky(reruns=...)</code> as a <strong>temporary</strong> measure with a tracking issue.</p>
+<hr />
+<h2 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h2>
+<p>Docs live under <code>docs/</code> and are built with <strong>MkDocs</strong> (Material theme).</p>
+<ul>
+<li>Keep reference pages in sync when changing public APIs (protocol messages, coordinator/worker interfaces).</li>
+<li>Prefer short, task‑oriented pages. Put long rationale into <code>development/architecture.md</code>.</li>
+<li>Run <code>mkdocs serve</code> locally to preview. Do <strong>not</strong> commit the built <code>site/</code> folder; GitHub Actions deploys Pages automatically.</li>
+</ul>
+<hr />
+<h2 id="security-secrets">Security &amp; secrets<a class="headerlink" href="#security-secrets" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Never commit credentials or tokens. Use environment variables in examples.</li>
+<li>Treat logs as potentially sensitive; avoid dumping full payloads unless sanitized.</li>
+</ul>
+<hr />
+<h2 id="design-principles-projectspecific">Design principles (project‑specific)<a class="headerlink" href="#design-principles-projectspecific" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Explicit states</strong>: transitions go through <code>RunState</code> and are visible in the task document.</li>
+<li><strong>Exactly‑once intent</strong> for outbox/bus: deduplicate via <code>fp</code> (fingerprint), idempotent Kafka producers where applicable.</li>
+<li><strong>Cooperative cancellation</strong>: make workers stop promptly and safely when signaled (signals topic, DB flags).</li>
+<li><strong>Resilient batching</strong>: partial artifacts per batch, final “complete” artifact on finalize.</li>
+</ul>
+<hr />
+<h2 id="getting-help">Getting help<a class="headerlink" href="#getting-help" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Open a <strong>Draft PR</strong> early to discuss design.</li>
+<li>Use Discussions/Issues for proposals and bug reports.</li>
+<li>Ping maintainers in the PR if you need a review on a deadline.</li>
+</ul>
+<p>Thanks again for contributing ❤️</p>
 
 
 
