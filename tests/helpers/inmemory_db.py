@@ -114,7 +114,6 @@ class InMemCollection:
 
     # ───────────────────────── Query match ─────────────────────────
 
-
     def _match(self, doc, flt):
         from enum import Enum
 
