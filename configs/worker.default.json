@@ -22,7 +22,5 @@
   "pull_poll_ms_default": 300,
   "pull_empty_backoff_ms_max": 4000,
 
-  "db_cancel_poll_ms": 500,
-
-  "state_dir": "./.worker_state"
+  "db_cancel_poll_ms": 500
 }

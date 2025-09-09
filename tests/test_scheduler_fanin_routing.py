@@ -15,8 +15,13 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from tests.helpers import dbg
-from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
+from tests.helpers import BROKER, dbg
+from tests.helpers.graph import (
+    node_by_id,
+    prime_graph,
+    wait_node_running,
+    wait_task_finished,
+)
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Only the roles required by this module
@@ -333,3 +338,143 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
     cnt = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "merge", "status": "complete"})
     dbg("MERGE.ART.COUNT", count=cnt)
     assert cnt >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(reason="routing.on_failure is not implemented yet", strict=False)
+async def test_routing_on_failure_triggers_remediator_only(
+    env_and_imports, inmemory_db, coord, workers_indexer_analyzer
+):
+    """
+    On upstream TASK_FAILED(permanent=True), only the 'on_failure' remediator should run; 'on_success' must not.
+    """
+    cd, _ = env_and_imports
+
+    # Upstream that we will fail manually via a forged status event.
+    u = _make_indexer_node("u", total=5, batch=5)
+    u["routing"] = {"on_success": ["succ"], "on_failure": ["remed"]}
+
+    succ = {
+        "node_id": "succ",
+        "type": "analyzer",
+        "depends_on": ["u"],
+        "fan_in": "all",
+        "io": {
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 40},
+            }
+        },
+        "status": None,
+        "attempt_epoch": 0,
+    }
+    remed = {
+        "node_id": "remed",
+        "type": "analyzer",
+        "depends_on": [],  # should be triggered by routing.on_failure (no explicit edge)
+        "fan_in": "all",
+        "io": {"input_inline": {"input_adapter": "noop", "input_args": {}}},
+        "status": None,
+        "attempt_epoch": 0,
+    }
+
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [u, succ, remed],
+        "edges": [["u", "succ"]],  # only on-success path is wired explicitly
+    }
+    graph = prime_graph(cd, graph)
+
+    task_id = await coord.create_task(params={}, graph=graph)
+
+    # Forge a permanent failure from the upstream without starting it for real.
+    env = {
+        "msg_type": "event",
+        "role": "worker",
+        "dedup_id": f"test:{task_id}:u:0:fail",
+        "task_id": task_id,
+        "node_id": "u",
+        "step_type": "indexer",
+        "attempt_epoch": 0,  # matches current attempt_epoch (not started)
+        "ts_ms": 0,
+        "payload": {"kind": "TASK_FAILED", "permanent": True, "reason_code": "test_fail"},
+    }
+    await BROKER.produce("status.indexer.v1", env)
+
+    # Give the coordinator some time to process the failure.
+    await cd.asyncio.sleep(0.2)  # uses patched fast tick settings via fixtures
+
+    doc = await inmemory_db.tasks.find_one({"id": task_id}, {"graph": 1})
+    s_succ = (node_by_id(doc, "succ") or {}).get("status")
+    s_rem = (node_by_id(doc, "remed") or {}).get("status")
+
+    # Expected (when implemented): remediator finished, succ did not run.
+    assert str(s_rem).endswith("finished")
+    assert not str(s_succ).endswith("running") and not str(s_succ).endswith("finished")
+
+
+@pytest.mark.asyncio
+async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
+    env_and_imports, inmemory_db, coord, workers_indexer_analyzer, monkeypatch
+):
+    """
+    One upstream → two downstreams: A has start_when=first_batch (starts early),
+    B has no start_when (waits for completion).
+    """
+    cd, _ = env_and_imports
+    monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.12")
+
+    u = _make_indexer_node("u", total=12, batch=4)  # 3 batches
+    a_fast = {
+        "node_id": "a_fast",
+        "type": "analyzer",
+        "depends_on": ["u"],
+        "fan_in": "all",
+        "io": {
+            "start_when": "first_batch",
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 30},
+            },
+        },
+        "status": None,
+        "attempt_epoch": 0,
+    }
+    b_wait = {
+        "node_id": "b_wait",
+        "type": "analyzer",
+        "depends_on": ["u"],
+        "fan_in": "all",
+        "io": {
+            "input_inline": {
+                "input_adapter": "pull.from_artifacts",
+                "input_args": {"from_nodes": ["u"], "poll_ms": 30},
+            }
+        },
+        "status": None,
+        "attempt_epoch": 0,
+    }
+
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [u, a_fast, b_wait],
+        "edges": [["u", "a_fast"], ["u", "b_wait"]],
+    }
+    graph = prime_graph(cd, graph)
+
+    task_id = await coord.create_task(params={}, graph=graph)
+
+    # A should start while U is still running.
+    doc_when_a_runs = await wait_node_running(inmemory_db, task_id, "a_fast", timeout=8.0)
+    st_u = (node_by_id(doc_when_a_runs, "u") or {}).get("status")
+    st_b = (node_by_id(doc_when_a_runs, "b_wait") or {}).get("status")
+    assert not str(st_u).endswith("finished")
+    assert not str(st_b).endswith("running")
+
+    # Eventually both must finish.
+    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
+    final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
+    dbg("FANOUT.MIXED.FINAL", statuses=final)
+    assert final["u"] == cd.RunState.finished
+    assert final["a_fast"] == cd.RunState.finished
+    assert final["b_wait"] == cd.RunState.finished

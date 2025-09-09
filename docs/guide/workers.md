@@ -72,9 +72,6 @@ config = WorkerConfig(
     hb_interval_sec=20,                # Heartbeat frequency
     announce_interval_sec=60,          # Worker announcement frequency
 
-    # Local state management
-    state_dir="./.worker_state",       # Directory for persistent state
-
     # Performance tuning
     dedup_cache_size=10000,           # Deduplication cache size
     dedup_ttl_ms=3600_000,            # Dedup entry TTL

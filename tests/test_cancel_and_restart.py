@@ -380,7 +380,7 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
             if kind == "TASK_ACCEPTED" and epoch >= 1:
                 seen_accept_e1 = True
                 if saved_bok_e1:
-                    # Forge a stale BATCH_OK from epoch 0 with its own dedup_id so its recorded
+                    # Forge a stale BATCH_OK from epoch 0 with its own dedup_id so it's recorded
                     fake_old = copy.deepcopy(saved_bok_e1)
                     fake_old["attempt_epoch"] = 0
                     uid = (fake_old.get("payload") or {}).get("batch_uid")
@@ -405,6 +405,16 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     coll_task.cancel()
     with suppress(asyncio.CancelledError):
         await coll_task
+
+    # Ensure the injected stale BATCH_OK has been consumed and persisted into worker_events
+    for _ in range(50):  # ~500ms total
+        cnt = await inmemory_db.worker_events.count_documents(
+            {"task_id": tid, "node_id": "fx", "attempt_epoch": 0, "payload.kind": "BATCH_OK"}
+        )
+        if cnt >= 1:
+            break
+        await asyncio.sleep(0.01)
+
     await spy.stop()
 
     # Node finished and epoch advanced (retry happened)

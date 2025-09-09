@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer
+from tests.helpers.util import dbg
 
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
@@ -86,6 +87,22 @@ class Coordinator:
         self._tasks.clear()
         await self.outbox.stop()
         await self.bus.stop()
+
+    async def restart(self) -> None:
+        """
+        Soft restart: stop coordinator loops and Kafka consumers, then bring them back up.
+        DB/Bus/Outbox instances are preserved so DB-backed deduplication
+        (worker_events / metrics_raw / outbox) remains intact.
+        """
+        # Fully stop current loops/consumers
+        await self.stop()
+        # Reset internal references for a clean start
+        self._announce_consumer = None
+        self._query_reply_consumer = None
+        self._status_consumers = {}
+        self._tasks = set()
+        # Keep the same _gid — the consumer group will reconnect
+        await self.start()
 
     def _spawn(self, coro):
         t = asyncio.create_task(coro)
@@ -201,11 +218,33 @@ class Coordinator:
                 except Exception:
                     pass
 
+                node_status = self._to_runstate(node.get("status"))
+
                 _k = env.payload.get("kind")
                 try:
                     kind = _k if isinstance(_k, EventKind) else EventKind(_k)
                 except Exception:
                     kind = None
+
+                needs_running = {
+                    EventKind.TASK_ACCEPTED,
+                    EventKind.TASK_HEARTBEAT,
+                    EventKind.BATCH_OK,
+                    EventKind.BATCH_FAILED,
+                    EventKind.TASK_DONE,
+                }
+
+                allow_even_if_not_running = False
+                if kind == EventKind.TASK_FAILED:
+                    try:
+                        pf = EvTaskFailed.model_validate(env.payload)
+                        allow_even_if_not_running = bool(pf.permanent)
+                    except Exception:
+                        allow_even_if_not_running = False
+
+                if (kind in needs_running) and (node_status != RunState.running) and not allow_even_if_not_running:
+                    await c.commit()
+                    continue
                 try:
                     if kind == EventKind.TASK_ACCEPTED:
                         await self._on_task_accepted(env)
@@ -405,7 +444,10 @@ class Coordinator:
     async def _preflight_and_maybe_start(self, task_doc: dict[str, Any], node: dict[str, Any]) -> None:
         task_id = task_doc["id"]
         node_id = node["node_id"]
-        new_epoch = int(node.get("attempt_epoch", 0)) + 1
+        old_epoch = int(node.get("attempt_epoch", 0))
+        new_epoch = old_epoch + 1
+
+        dbg("COORD.PREFLIGHT", task_id=task_id, node_id=node_id, old_epoch=old_epoch, new_epoch=new_epoch)
 
         try:
             cnt = await self.db.artifacts.count_documents(
@@ -448,23 +490,52 @@ class Coordinator:
             pass
 
         replies = self.bus.collect_replies(discover_env.corr_id)
+        dbg("COORD.DISCOVER.REPLIES", count=len(replies))
+
+        prev_lease_worker = ((node.get("lease") or {}).get("worker_id")) or None
 
         active = [
             r
             for r in replies
             if (
                 r.payload.get("run_state") in ("running", "finishing")
+                # The snapshot carries the worker's actual run epoch (ar.attempt_epoch),
+                # while the node document stores the node's current epoch.
                 and r.payload.get("attempt_epoch") == node.get("attempt_epoch")
+                # Adopt is allowed only if the lease owner matches the previous lease worker.
+                and prev_lease_worker
+                and r.payload.get("worker_id") == prev_lease_worker
+                and ((r.payload.get("lease") or {}).get("worker_id") == prev_lease_worker)
             )
         ]
+
         if active:
+            snap = active[0].payload
+            lease = snap.get("lease") or {}
             await self.db.tasks.update_one(
-                {"id": task_id, "graph.nodes.node_id": node_id}, {"$set": {"graph.nodes.$.status": RunState.running}}
+                {"id": task_id, "graph.nodes.node_id": node_id},
+                {
+                    "$set": {
+                        "graph.nodes.$.status": RunState.running,
+                        "graph.nodes.$.lease.worker_id": lease.get("worker_id"),
+                        "graph.nodes.$.lease.lease_id": lease.get("lease_id"),
+                        "graph.nodes.$.lease.deadline_ts_ms": lease.get("deadline_ts_ms"),
+                    }
+                },
             )
+            dbg(
+                "COORD.PREFLIGHT.ADOPT",
+                task_id=task_id,
+                node_id=node_id,
+                epoch=int(node.get("attempt_epoch", 0)),
+                worker_id=prev_lease_worker,
+            )
+            await self.db.tasks.update_one({"id": task_id}, {"$max": {"last_event_recv_ms": self.clock.now_ms()}})
             return
 
         complete = any((r.payload.get("artifacts") or {}).get("complete") for r in replies)
         if complete:
+            dbg("COORD.PREFLIGHT.COMPLETE", node_id=node_id, set_epoch=new_epoch)
             await self.db.tasks.update_one(
                 {"id": task_id, "graph.nodes.node_id": node_id},
                 {
@@ -484,6 +555,13 @@ class Coordinator:
             status = self._to_runstate((fresh_node or {}).get("status"))
             if status not in (RunState.deferred,):
                 if max(0, self.clock.now_ms() - last) < self.cfg.discovery_window_ms:
+                    dbg(
+                        "COORD.PREFLIGHT.GATE.SKIP",
+                        node_id=node_id,
+                        last_event_ms=last,
+                        now=self.clock.now_ms(),
+                        window_ms=self.cfg.discovery_window_ms,
+                    )
                     return
         except Exception:
             pass
@@ -508,8 +586,10 @@ class Coordinator:
         }
         cas_res = await self.db.tasks.find_one_and_update(q, upd)
         if not cas_res:
-            # someone else advanced it
+            dbg("COORD.PREFLIGHT.CAS.SKIP", node_id=node_id, reason="predicate_failed")
             return
+
+        dbg("COORD.PREFLIGHT.CAS.OK", task_id=task_id, node_id=node_id, epoch=new_epoch)
 
         cancel_token = str(uuid.uuid4())
         cmd = CmdTaskStart(
@@ -532,6 +612,7 @@ class Coordinator:
             ts_ms=self.clock.now_ms(),
             payload=cmd.model_dump(),
         )
+        dbg("COORD.CMD.START", node_id=node_id, epoch=new_epoch, cancel_token=cancel_token)
         await self._enqueue_cmd(env)
 
     # ---- event handlers
@@ -565,6 +646,14 @@ class Coordinator:
 
     async def _on_task_accepted(self, env: Envelope) -> None:
         p = EvTaskAccepted.model_validate(env.payload)
+        dbg(
+            "COORD.ON_ACCEPT",
+            node_id=env.node_id,
+            epoch=env.attempt_epoch,
+            worker_id=p.worker_id,
+            lease_id=p.lease_id,
+            deadline=p.lease_deadline_ts_ms,
+        )
         await self.db.tasks.update_one(
             {"id": env.task_id, "graph.nodes.node_id": env.node_id},
             {
@@ -578,15 +667,25 @@ class Coordinator:
 
     async def _on_task_heartbeat(self, env: Envelope) -> None:
         p = EvHeartbeat.model_validate(env.payload)
+        dbg(
+            "COORD.ON_HEARTBEAT",
+            node_id=env.node_id,
+            epoch=env.attempt_epoch,
+            worker_id=p.worker_id,
+            lease_id=p.lease_id,
+            deadline=p.lease_deadline_ts_ms,
+        )
         await self.db.tasks.update_one(
             {"id": env.task_id, "graph.nodes.node_id": env.node_id},
             {
                 "$set": {
                     "graph.nodes.$.lease.worker_id": p.worker_id,
                     "graph.nodes.$.lease.lease_id": p.lease_id,
-                    "graph.nodes.$.lease.deadline_ts_ms": p.lease_deadline_ts_ms,
                 },
-                "$max": {"graph.nodes.$.last_event_recv_ms": self.clock.now_ms()},
+                "$max": {
+                    "graph.nodes.$.lease.deadline_ts_ms": int(p.lease_deadline_ts_ms or 0),
+                    "graph.nodes.$.last_event_recv_ms": self.clock.now_ms(),
+                },
             },
         )
 

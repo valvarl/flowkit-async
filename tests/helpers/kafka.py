@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .util import dbg
@@ -24,17 +24,11 @@ class ChaosConfig:
     seed: int = 12345
     broker_delay_range: tuple[float, float] = (0.0, 0.003)  # seconds
     consumer_poll_delay_range: tuple[float, float] = (0.0, 0.002)
-    dup_prob_by_topic: dict[str, float] = None  # e.g. {"status.": 0.06}
-    drop_prob_by_topic: dict[str, float] = None  # e.g. {"cmd.": 0.01}
+    dup_prob_by_topic: dict[str, float] = field(default_factory=dict)  # e.g. {"status.": 0.06}
+    drop_prob_by_topic: dict[str, float] = field(default_factory=dict)  # e.g. {"cmd.": 0.01}
     enable_broker_delays: bool = True
     enable_consumer_delays: bool = True
     enable_dup_drop: bool = True
-
-    def __post_init__(self) -> None:
-        if self.dup_prob_by_topic is None:
-            self.dup_prob_by_topic = {}
-        if self.drop_prob_by_topic is None:
-            self.drop_prob_by_topic = {}
 
 
 class _Chaos:
