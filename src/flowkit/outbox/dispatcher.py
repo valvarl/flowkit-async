@@ -70,7 +70,14 @@ class OutboxDispatcher:
                             _flt = {"_id": ob.get("_id")} if ob.get("_id") is not None else {"fp": ob.get("fp")}
                             await self.db.outbox.update_one(
                                 _flt,
-                                {"$set": {"state": "failed", "last_error": str(e), "updated_at": self.clock.now_dt()}},
+                                {
+                                    "$set": {
+                                        "state": "failed",
+                                        "attempts": attempts,
+                                        "last_error": str(e),
+                                        "updated_at": self.clock.now_dt(),
+                                    }
+                                },
                             )
                         else:
                             # exp backoff with jitter

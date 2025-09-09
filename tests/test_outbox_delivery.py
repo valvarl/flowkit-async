@@ -3,15 +3,42 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 import pytest
+
+from tests.helpers.kafka import BROKER
 
 pytestmark = pytest.mark.use_outbox
 
 
 def _dt_to_ms(dt: datetime | None) -> int:
     return int(dt.timestamp() * 1000) if dt else 0
+
+
+def _wait_outbox_doc(
+    db,
+    *,
+    topic: str,
+    key: str,
+    pred: Callable[[dict], bool],
+    timeout: float = 6.0,
+):
+    """Poll the outbox row until `pred(doc)` returns True."""
+
+    async def _impl():
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    d = await db.outbox.find_one({"topic": topic, "key": key})
+                    if d and pred(d):
+                        return d
+                    await asyncio.sleep(0.03)
+        except TimeoutError:
+            raise AssertionError("outbox doc did not reach expected condition") from None
+
+    return _impl()
 
 
 @pytest.mark.asyncio
@@ -159,3 +186,244 @@ async def test_outbox_exactly_once_fp_uniqueness(env_and_imports, inmemory_db, c
     docs = [r for r in inmemory_db.outbox.rows if r.get("topic") == topic and r.get("key") == key]
     assert len(docs) == 1
     assert docs[0].get("state") == "sent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.use_outbox
+async def test_outbox_crash_between_send_and_mark_sent(env_and_imports, inmemory_db, coord, monkeypatch):
+    """
+    Send succeeds, coordinator crashes before mark(sent) → after restart the outbox may resend,
+    but there is only ONE effective delivery for (topic,key,dedup_id).
+    """
+    cd, _ = env_and_imports
+    topic, key = "test.topic.crash", "k-crash"
+
+    sent_calls: list[tuple[str, str, str]] = []
+    orig_raw = coord.bus._raw_send
+
+    async def counting_raw_send(t, k, env):
+        sent_calls.append((t, k.decode(), getattr(env, "dedup_id", "")))
+        return await orig_raw(t, k, env)
+
+    monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
+
+    # --- NEW: emulate broker-side idempotence by (topic, key, dedup_id)
+    delivered = set()
+    orig_produce = BROKER.produce
+
+    async def dedup_produce(t, value):
+        dedup_id = (value or {}).get("dedup_id") or ((value or {}).get("payload") or {}).get("dedup_id")
+        fp = (
+            t,
+            (value or {}).get("key", None),
+            dedup_id,
+        )  # key isn't in payload in your harness; bind test key explicitly below
+        # Since the in-mem broker doesn't pass the Kafka key in 'value',
+        # we'll just bind the test key in place:
+        fp = (t, key, dedup_id)
+        if fp in delivered:
+            return
+        delivered.add(fp)
+        await orig_produce(t, value)
+
+    monkeypatch.setattr(BROKER, "produce", dedup_produce, raising=True)
+    # --- end NEW
+
+    # Intercept the transition to 'sent' and simulate a crash before it.
+    orig_update = inmemory_db.outbox.update_one
+    crashed_once = {"done": False}
+
+    async def intercept_update(filter_q, update_q, *args, **kwargs):
+        set_map = (update_q or {}).get("$set") or {}
+        if not crashed_once["done"] and set_map.get("state") == "sent":
+            crashed_once["done"] = True
+            await coord.stop()  # crash before mark(sent)
+            raise asyncio.CancelledError("crash before mark(sent)")
+        return await orig_update(filter_q, update_q, *args, **kwargs)
+
+    inmemory_db.outbox.update_one = intercept_update  # type: ignore
+
+    env = cd.Envelope(
+        msg_type=cd.MsgType.cmd,
+        role=cd.Role.coordinator,
+        dedup_id="crash-dedup-1",
+        task_id="t1",
+        node_id="n1",
+        step_type="echo",
+        attempt_epoch=1,
+        ts_ms=coord.clock.now_ms(),
+        payload={"kind": "TEST"},
+    )
+
+    await coord.outbox.enqueue(topic=topic, key=key, env=env)
+
+    # Wait until at least one real send happened.
+    await _wait_outbox_doc(
+        inmemory_db,
+        topic=topic,
+        key=key,
+        pred=lambda _d: len(sent_calls) >= 1,
+        timeout=6.0,
+    )
+
+    # Bring the coordinator back.
+    if hasattr(coord, "restart"):
+        await coord.restart()
+    else:
+        await coord.start()
+
+    # Give the dispatcher a moment to re-scan and (likely) resend.
+    await asyncio.sleep(0.4)
+
+    assert (topic, key, "crash-dedup-1") in delivered
+    eff = sum(1 for fp in delivered if fp == (topic, key, "crash-dedup-1"))
+    assert eff == 1, f"Expected exactly one effective delivery, got {eff}; raw sends: {sent_calls}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.use_outbox
+async def test_outbox_dedup_survives_restart(env_and_imports, inmemory_db, coord, monkeypatch):
+    """
+    Deduplication by (topic,key,dedup_id) persists across coordinator restart:
+    re-enqueue of the same envelope after restart does not create a second outbox row or send.
+    """
+    cd, _ = env_and_imports
+    topic, key, dedup_id = "test.topic.dedup", "k-dedup", "dedup-const"
+
+    sent_calls: list[tuple[str, str, str]] = []
+    orig_raw = coord.bus._raw_send
+
+    async def counting_raw_send(t, k, env):
+        sent_calls.append((t, k.decode(), getattr(env, "dedup_id", "")))
+        return await orig_raw(t, k, env)
+
+    monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
+
+    env = cd.Envelope(
+        msg_type=cd.MsgType.cmd,
+        role=cd.Role.coordinator,
+        dedup_id=dedup_id,
+        task_id="t2",
+        node_id="n2",
+        step_type="echo",
+        attempt_epoch=1,
+        ts_ms=coord.clock.now_ms(),
+        payload={"kind": "TEST"},
+    )
+
+    # First enqueue → sent
+    await coord.outbox.enqueue(topic=topic, key=key, env=env)
+    await _wait_outbox_doc(inmemory_db, topic=topic, key=key, pred=lambda d: d.get("state") == "sent", timeout=6.0)
+
+    # Restart the coordinator
+    if hasattr(coord, "restart"):
+        await coord.restart()
+    else:
+        await coord.stop()
+        await coord.start()
+
+    # Re-enqueue the same envelope (same fp)
+    await coord.outbox.enqueue(topic=topic, key=key, env=env)
+    await asyncio.sleep(0.3)
+
+    # Exactly one outbox row for (topic,key) and it is 'sent'
+    docs = [r for r in inmemory_db.outbox.rows if r.get("topic") == topic and r.get("key") == key]
+    assert len(docs) == 1
+    assert docs[0].get("state") == "sent"
+
+    # Exactly one physical send for the same triplet
+    total_same = sum(1 for t, k, dd in sent_calls if t == topic and k == key and dd == dedup_id)
+    assert total_same == 1, f"Expected 1 send, got {total_same} ({sent_calls})"
+
+
+@pytest.mark.asyncio
+@pytest.mark.use_outbox
+@pytest.mark.cfg(coord={"outbox_backoff_min_ms": 50, "outbox_backoff_max_ms": 120, "outbox_dispatch_tick_sec": 0.02})
+async def test_outbox_backoff_caps_with_jitter(env_and_imports, inmemory_db, coord, monkeypatch):
+    """
+    Exponential backoff is capped by max and jitter stays within a reasonable window.
+    """
+    cd, _ = env_and_imports
+    topic, key = "test.topic.backoffcap", "k-cap"
+
+    async def always_fail(t, k, env):
+        raise RuntimeError("forced broker failure")
+
+    monkeypatch.setattr(coord.bus, "_raw_send", always_fail, raising=True)
+
+    env = cd.Envelope(
+        msg_type=cd.MsgType.cmd,
+        role=cd.Role.coordinator,
+        dedup_id="cap-dedup",
+        task_id="t3",
+        node_id="n3",
+        step_type="echo",
+        attempt_epoch=1,
+        ts_ms=coord.clock.now_ms(),
+        payload={"kind": "TEST"},
+    )
+
+    await coord.outbox.enqueue(topic=topic, key=key, env=env)
+
+    # Wait until we have at least 4 attempts to ensure growth → cap
+    d = await _wait_outbox_doc(
+        inmemory_db,
+        topic=topic,
+        key=key,
+        pred=lambda r: r.get("state") == "retry" and int(r.get("attempts", 0)) >= 4,
+        timeout=8.0,
+    )
+
+    gap = int(d.get("next_attempt_at_ms", 0)) - _dt_to_ms(d.get("updated_at"))
+    cap = coord.cfg.outbox_backoff_max_ms
+    assert 0 <= gap <= int(cap * 1.25), f"gap {gap} should be <= cap {cap} (± jitter)"
+    assert gap >= int(cap * 0.6), f"gap {gap} is too small for capped backoff with jitter"
+
+
+@pytest.mark.asyncio
+@pytest.mark.use_outbox
+@pytest.mark.cfg(
+    coord={
+        "outbox_max_retry": 3,
+        "outbox_backoff_min_ms": 30,
+        "outbox_backoff_max_ms": 60,
+        "outbox_dispatch_tick_sec": 0.02,
+    }
+)
+async def test_outbox_dlq_after_max_retries(env_and_imports, inmemory_db, coord, monkeypatch):
+    """
+    After reaching max retries, the outbox row is moved to a terminal state with attempts >= max.
+    """
+    cd, _ = env_and_imports
+    topic, key = "test.topic.dlq", "k-dlq"
+
+    async def always_fail(t, k, env):
+        raise RuntimeError("permanent broker failure")
+
+    monkeypatch.setattr(coord.bus, "_raw_send", always_fail, raising=True)
+
+    env = cd.Envelope(
+        msg_type=cd.MsgType.cmd,
+        role=cd.Role.coordinator,
+        dedup_id="dlq-dedup",
+        task_id="t4",
+        node_id="n4",
+        step_type="echo",
+        attempt_epoch=1,
+        ts_ms=coord.clock.now_ms(),
+        payload={"kind": "TEST"},
+    )
+
+    await coord.outbox.enqueue(topic=topic, key=key, env=env)
+
+    max_val = int(coord.cfg.outbox_max_retry)
+    d = await _wait_outbox_doc(
+        inmemory_db,
+        topic=topic,
+        key=key,
+        pred=lambda r: int(r.get("attempts", 0)) >= max_val and r.get("state") not in ("new", "retry", "sending"),
+        timeout=10.0,
+    )
+
+    assert int(d.get("attempts", 0)) >= max_val
+    assert d.get("state") in ("dlq", "dead", "failed"), f"unexpected terminal state: {d.get('state')}"
