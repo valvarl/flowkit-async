@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
 from flowkit.protocol.messages import RunState
 
@@ -20,7 +20,8 @@ def prime_graph(cd, graph: dict[str, Any]) -> dict[str, Any]:
         st = n.get("status")
         if st is None or (isinstance(st, str) and not st.strip()):
             # Support tests where RunState may be an enum on `cd`, or just strings.
-            n["status"] = getattr(cd, "RunState", type("RS", (), {"queued": "queued"})).queued
+            rs: Any = getattr(cd, "RunState", None)
+            n["status"] = getattr(rs, "queued", "queued")
         n.setdefault("attempt_epoch", 0)
         n.setdefault("stats", {})
         n.setdefault("lease", {})
@@ -35,7 +36,7 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[st
     t0 = time.monotonic()
     last_log = 0.0
     while time.monotonic() - t0 < timeout:
-        t = await db.tasks.find_one({"id": task_id})
+        t = cast(dict[str, Any] | None, await db.tasks.find_one({"id": task_id}))
         now = time.monotonic()
         if now - last_log >= 0.5:
             if t:
@@ -47,12 +48,12 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[st
             last_log = now
         if t and (t.get("status") == RunState.finished or str(t.get("status", "")).endswith("finished")):
             dbg("WAIT.DONE")
-            return t
+            return cast(dict[str, Any], t)
         await asyncio.sleep(0.03)
     raise AssertionError("task not finished in time")
 
 
-async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0):  # noqa: ASYNC109
+async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0) -> dict[str, Any]:  # noqa: ASYNC109
     """
     Wait until a node has *actually* started:
       - `started_at` is present OR
@@ -71,7 +72,7 @@ async def wait_node_running(db, task_id: str, node_id: str, timeout: float = 8.0
                 st = str(n.get("status") or "")
                 started = bool(n.get("started_at")) or int(n.get("attempt_epoch") or 0) > 0
                 if started or st.endswith("running") or st.endswith("finished"):
-                    return doc
+                    return cast(dict[str, Any], doc)
         await asyncio.sleep(0.01)  # tighter polling to catch short running windows
     raise AssertionError(f"node {node_id} not running in time")
 
@@ -130,7 +131,8 @@ def node_by_id(doc: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
     """
     if not doc:
         return {}
-    for n in doc.get("graph", {}).get("nodes") or []:
+    for raw in doc.get("graph", {}).get("nodes") or []:
+        n = cast(dict[str, Any], raw)
         if n.get("node_id") == node_id:
             return n
     return {}
@@ -142,11 +144,11 @@ async def wait_task_status(db, task_id: str, want: str, timeout: float = 6.0):  
     """
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
-        t = await db.tasks.find_one({"id": task_id})
+        t = cast(dict[str, Any] | None, await db.tasks.find_one({"id": task_id}))
         if t:
             st = str(t.get("status") or "")
             if st == want or st.endswith(want):
-                return t
+                return cast(dict[str, Any], t)
         await asyncio.sleep(0.02)
     raise AssertionError(f"task not reached status={want} in time")
 
@@ -169,10 +171,11 @@ def make_graph(
         agg={"after": "s", "node_id": "agg", "mode": "sum"}  # optional
       )
     """
-    graph = {"schema_version": "1.0", "nodes": list(nodes), "edges": [list(e) for e in edges]}
+    nodes_list: list[dict[str, Any]] = list(nodes)
+    edges_list: list[list[str]] = [list(e) for e in edges]
     if agg:
         name = agg.get("node_id") or f"agg_{agg['after']}"
-        graph["nodes"].append(
+        nodes_list.append(
             {
                 "node_id": name,
                 "type": "coordinator_fn",
@@ -183,5 +186,6 @@ def make_graph(
                 "attempt_epoch": 0,
             }
         )
-        graph["edges"].append([agg["after"], name])
+        edges_list.append([agg["after"], name])
+    graph: dict[str, Any] = {"schema_version": "1.0", "nodes": nodes_list, "edges": edges_list}
     return graph

@@ -130,9 +130,6 @@ class WorkerConfig:
     # DB cancel poll
     db_cancel_poll_ms: int = 500
 
-    # Local state
-    state_dir: str = "./.worker_state"
-
     # ---- derived (computed in post_init) ----
     lease_ttl_ms: int = 60_000
     hb_interval_ms: int = 20_000

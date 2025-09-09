@@ -8,6 +8,7 @@ from collections import OrderedDict
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from tests.helpers.util import dbg
 
 from ..core.config import WorkerConfig
 from ..core.time import Clock, SystemClock
@@ -339,6 +340,15 @@ class Worker:
                     "lease_deadline_ts_ms": lease_deadline_ms,
                 },
             )
+            dbg(
+                "WORKER.SEND.ACCEPTED",
+                task_id=env.task_id,
+                node_id=env.node_id,
+                epoch=env.attempt_epoch,
+                worker_id=self.worker_id,
+                lease_id=lease_id,
+                deadline=lease_deadline_ms,
+            )
             await self._send_status(role, acc_env)
 
             await self._pause_all_cmd_consumers()
@@ -555,6 +565,15 @@ class Worker:
                         "lease_id": self.active.lease_id,
                         "lease_deadline_ts_ms": lease_deadline_ms,
                     },
+                )
+                dbg(
+                    "WORKER.SEND.HB",
+                    task_id=self.active.task_id,
+                    node_id=self.active.node_id,
+                    epoch=self.active.attempt_epoch,
+                    worker_id=self.worker_id,
+                    lease_id=self.active.lease_id,
+                    deadline=lease_deadline_ms,
                 )
                 await self._send_status(role, hb_env)
                 await self.clock.sleep_ms(self.cfg.hb_interval_ms)
