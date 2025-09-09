@@ -45,7 +45,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install mkdocs mkdocs-material mkdocstrings[python] ruff mike
+          pip install -r docs/requirements.txt
 
       - name: Build check (strict)
         run: mkdocs build --clean --strict
