@@ -260,10 +260,12 @@ def warn_once(
         if code in _WARN_ONCE_SEEN:
             return
         _WARN_ONCE_SEEN.add(code)
-    base_extra: dict[str, Any] = {"code": code}
-    if extra:
-        base_extra.update(extra)
-    logger.log(level, msg, extra=base_extra)
+    adapter: logging.LoggerAdapter
+    if isinstance(logger, logging.LoggerAdapter):
+        adapter = logger
+    else:
+        adapter = _KwExtraAdapter(logger, {})
+    adapter.log(level, msg, code=code, **extra)
 
 
 # ---------- Public configuration API ----------
@@ -427,14 +429,18 @@ def swallow(
             await db.create_index(...)
     If reraise=True, exception is rethrown after logging.
     """
-    log = logger or get_logger("swallow")
+    base_logger = logger or get_logger("swallow")
+    if isinstance(base_logger, logging.LoggerAdapter):
+        log_adapter = base_logger
+    else:
+        log_adapter = _KwExtraAdapter(base_logger, {})
     try:
         yield
     except Exception as e:
         payload: dict[str, Any] = {"code": code, "expected": expected}
         if extra:
             payload.update(dict(extra))
-        log.log(level, msg or "Suppressed exception", exc_info=e, extra=payload)
+        log_adapter.log(level, msg or "Suppressed exception", exc_info=e, **payload)
         if reraise:
             raise
         return return_value
