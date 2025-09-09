@@ -3343,20 +3343,20 @@ summary in the index; the full docstring appears in <strong>Details</strong>.</p
 <td><a href="#tests-test_artifacts_data-py-test_merge_generic_creates_complete_artifact">test_merge_generic_creates_complete_artifact</a></td>
 <td>coordinator_fn: merge.generic combines results of nodes 'a' and 'b'.</td>
 <td>asyncio</td>
-<td><code>tests/test_artifacts_data.py:137</code></td>
+<td><code>tests/test_artifacts_data.py:158</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_artifacts_data-py-test_partial_shards_and_stream_counts">test_partial_shards_and_stream_counts</a></td>
 <td>Source w1 (indexer) emits batches with batch_uid → worker creates partial artifacts.</td>
 <td>asyncio</td>
-<td><code>tests/test_artifacts_data.py:89</code></td>
+<td><code>tests/test_artifacts_data.py:90</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details">Details<a class="headerlink" href="#details" title="Permanent link">&para;</a></h4>
 <h5 id="test_merge_generic_creates_complete_artifact">test_merge_generic_creates_complete_artifact<a class="headerlink" href="#test_merge_generic_creates_complete_artifact" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_artifacts_data-py-test_merge_generic_creates_complete_artifact"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_artifacts_data.py:137</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_artifacts_data.py:158</code></em></p>
 <p>coordinator_fn: merge.generic combines results of nodes 'a' and 'b'.</p>
 <p>We verify:
   * the task finishes
@@ -3364,7 +3364,7 @@ summary in the index; the full docstring appears in <strong>Details</strong>.</p
   * nodes 'a' and 'b' have artifacts (partial/complete — does not matter)</p>
 <h5 id="test_partial_shards_and_stream_counts">test_partial_shards_and_stream_counts<a class="headerlink" href="#test_partial_shards_and_stream_counts" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_artifacts_data-py-test_partial_shards_and_stream_counts"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_artifacts_data.py:89</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_artifacts_data.py:90</code></em></p>
 <p>Source w1 (indexer) emits batches with batch_uid → worker creates partial artifacts.
 Completion marks a 'complete' artifact. Analyzer reads via rechunk and accumulates a counter.</p>
 <p>We verify:
@@ -3389,56 +3389,56 @@ Completion marks a 'complete' artifact. Analyzer reads via rechunk and accumulat
 <td><a href="#tests-test_cancel_and_restart-py-test_cancel_before_any_start_keeps_all_nodes_idle">test_cancel_before_any_start_keeps_all_nodes_idle</a></td>
 <td>Cancel the task before any node can start: no node must enter 'running'.</td>
 <td>asyncio</td>
-<td><code>tests/test_cancel_and_restart.py:220</code></td>
+<td><code>tests/test_cancel_and_restart.py:231</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_cancel_and_restart-py-test_cancel_on_deferred_prevents_retry">test_cancel_on_deferred_prevents_retry</a></td>
 <td>Node 'flaky' fails on first attempt → becomes deferred with backoff.</td>
 <td>asyncio</td>
-<td><code>tests/test_cancel_and_restart.py:282</code></td>
+<td><code>tests/test_cancel_and_restart.py:295</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_cancel_and_restart-py-test_cascade_cancel_prevents_downstream">test_cascade_cancel_prevents_downstream</a></td>
 <td>Cancel the task while upstream runs: downstream must not start.</td>
 <td>asyncio</td>
-<td><code>tests/test_cancel_and_restart.py:99</code></td>
+<td><code>tests/test_cancel_and_restart.py:97</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_cancel_and_restart-py-test_restart_higher_epoch_ignores_old_batch_ok">test_restart_higher_epoch_ignores_old_batch_ok</a></td>
 <td>After a node restarts with a higher epoch, the coordinator must ignore a stale BATCH_OK from a lower epoch.</td>
 <td>asyncio</td>
-<td><code>tests/test_cancel_and_restart.py:354</code></td>
+<td><code>tests/test_cancel_and_restart.py:366</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_cancel_and_restart-py-test_restart_higher_epoch_ignores_old_events">test_restart_higher_epoch_ignores_old_events</a></td>
 <td>After accepting epoch&gt;=1, re-inject an old event (epoch=0).</td>
 <td>asyncio</td>
-<td><code>tests/test_cancel_and_restart.py:167</code></td>
+<td><code>tests/test_cancel_and_restart.py:169</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_1">Details<a class="headerlink" href="#details_1" title="Permanent link">&para;</a></h4>
 <h5 id="test_cancel_before_any_start_keeps_all_nodes_idle">test_cancel_before_any_start_keeps_all_nodes_idle<a class="headerlink" href="#test_cancel_before_any_start_keeps_all_nodes_idle" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_cancel_and_restart-py-test_cancel_before_any_start_keeps_all_nodes_idle"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:220</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:231</code></em></p>
 <p>Cancel the task before any node can start: no node must enter 'running'.</p>
 <h5 id="test_cancel_on_deferred_prevents_retry">test_cancel_on_deferred_prevents_retry<a class="headerlink" href="#test_cancel_on_deferred_prevents_retry" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_cancel_and_restart-py-test_cancel_on_deferred_prevents_retry"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:282</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:295</code></em></p>
 <p>Node 'flaky' fails on first attempt → becomes deferred with backoff.
 Cancel the task right after TASK_FAILED(epoch=1) and ensure no higher epoch is accepted.</p>
 <h5 id="test_cascade_cancel_prevents_downstream">test_cascade_cancel_prevents_downstream<a class="headerlink" href="#test_cascade_cancel_prevents_downstream" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_cancel_and_restart-py-test_cascade_cancel_prevents_downstream"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:99</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:97</code></em></p>
 <p>Cancel the task while upstream runs: downstream must not start.</p>
 <h5 id="test_restart_higher_epoch_ignores_old_batch_ok">test_restart_higher_epoch_ignores_old_batch_ok<a class="headerlink" href="#test_restart_higher_epoch_ignores_old_batch_ok" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_cancel_and_restart-py-test_restart_higher_epoch_ignores_old_batch_ok"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:354</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:366</code></em></p>
 <p>After a node restarts with a higher epoch, the coordinator must ignore a stale BATCH_OK
 from a lower epoch. Also ensure injected stale event doesn't create duplicate metrics.</p>
 <h5 id="test_restart_higher_epoch_ignores_old_events">test_restart_higher_epoch_ignores_old_events<a class="headerlink" href="#test_restart_higher_epoch_ignores_old_events" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_cancel_and_restart-py-test_restart_higher_epoch_ignores_old_events"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:167</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_cancel_and_restart.py:169</code></em></p>
 <p>After accepting epoch&gt;=1, re-inject an old event (epoch=0). Coordinator must ignore it by fencing.</p>
 <hr />
 <h3 id="teststest_chaos_modelspy">tests/test_chaos_models.py<a class="headerlink" href="#teststest_chaos_modelspy" title="Permanent link">&para;</a></h3>
@@ -3467,47 +3467,47 @@ from a lower epoch. Also ensure injected stale event doesn't create duplicate me
 <td><a href="#tests-test_chaos_models-py-test_chaos_coordinator_restart">test_chaos_coordinator_restart</a></td>
 <td>Restart the Coordinator while the task is running.</td>
 <td>asyncio</td>
-<td><code>tests/test_chaos_models.py:327</code></td>
+<td><code>tests/test_chaos_models.py:344</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_chaos_models-py-test_chaos_delays_and_duplications">test_chaos_delays_and_duplications</a></td>
 <td>Chaos mode: small broker/consumer jitter + message duplications (no drops).</td>
 <td>asyncio</td>
-<td><code>tests/test_chaos_models.py:274</code></td>
+<td><code>tests/test_chaos_models.py:277</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_chaos_models-py-test_chaos_worker_restart_mid_stream">test_chaos_worker_restart_mid_stream</a></td>
 <td>Restart the 'enricher' worker in the middle of the stream.</td>
 <td>asyncio</td>
-<td><code>tests/test_chaos_models.py:294</code></td>
+<td><code>tests/test_chaos_models.py:304</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_chaos_models-py-test_e2e_streaming_with_kafka_chaos">test_e2e_streaming_with_kafka_chaos</a></td>
 <td>With chaos enabled (broker/consumer jitter and message duplications, no drops), the full pipeline should still complete and produce artifacts at indexer/enricher/ocr stages.</td>
 <td>asyncio</td>
-<td><code>tests/test_chaos_models.py:241</code></td>
+<td><code>tests/test_chaos_models.py:245</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_2">Details<a class="headerlink" href="#details_2" title="Permanent link">&para;</a></h4>
 <h5 id="test_chaos_coordinator_restart">test_chaos_coordinator_restart<a class="headerlink" href="#test_chaos_coordinator_restart" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_chaos_models-py-test_chaos_coordinator_restart"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:327</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:344</code></em></p>
 <p>Restart the Coordinator while the task is running.
 Expect the pipeline to recover and finish.</p>
 <h5 id="test_chaos_delays_and_duplications">test_chaos_delays_and_duplications<a class="headerlink" href="#test_chaos_delays_and_duplications" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_chaos_models-py-test_chaos_delays_and_duplications"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:274</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:277</code></em></p>
 <p>Chaos mode: small broker/consumer jitter + message duplications (no drops).
 Expect the pipeline to finish and produce artifacts for w1/w2/w5.</p>
 <h5 id="test_chaos_worker_restart_mid_stream">test_chaos_worker_restart_mid_stream<a class="headerlink" href="#test_chaos_worker_restart_mid_stream" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_chaos_models-py-test_chaos_worker_restart_mid_stream"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:294</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:304</code></em></p>
 <p>Restart the 'enricher' worker in the middle of the stream.
 Expect the coordinator to fence and the pipeline to still finish.</p>
 <h5 id="test_e2e_streaming_with_kafka_chaos">test_e2e_streaming_with_kafka_chaos<a class="headerlink" href="#test_e2e_streaming_with_kafka_chaos" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_chaos_models-py-test_e2e_streaming_with_kafka_chaos"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:241</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_chaos_models.py:245</code></em></p>
 <p>With chaos enabled (broker/consumer jitter and message duplications, no drops),
 the full pipeline should still complete and produce artifacts at indexer/enricher/ocr stages.</p>
 <hr />
@@ -3528,44 +3528,44 @@ the full pipeline should still complete and produce artifacts at indexer/enriche
 <td><a href="#tests-test_concurrency_limits-py-test_concurrent_tasks_respect_global_limit">test_concurrent_tasks_respect_global_limit</a></td>
 <td>(no docstring)</td>
 <td>asyncio</td>
-<td><code>tests/test_concurrency_limits.py:267</code></td>
+<td><code>tests/test_concurrency_limits.py:302</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_concurrency_limits-py-test_max_global_running_limit">test_max_global_running_limit</a></td>
 <td>(no docstring)</td>
 <td>asyncio</td>
-<td><code>tests/test_concurrency_limits.py:141</code></td>
+<td><code>tests/test_concurrency_limits.py:153</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_concurrency_limits-py-test_max_type_concurrency_limits">test_max_type_concurrency_limits</a></td>
 <td>(no docstring)</td>
 <td>asyncio</td>
-<td><code>tests/test_concurrency_limits.py:177</code></td>
+<td><code>tests/test_concurrency_limits.py:196</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_concurrency_limits-py-test_multi_workers_same_type_rr_distribution">test_multi_workers_same_type_rr_distribution</a></td>
 <td>(no docstring)</td>
 <td>asyncio</td>
-<td><code>tests/test_concurrency_limits.py:222</code></td>
+<td><code>tests/test_concurrency_limits.py:252</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_3">Details<a class="headerlink" href="#details_3" title="Permanent link">&para;</a></h4>
 <h5 id="test_concurrent_tasks_respect_global_limit">test_concurrent_tasks_respect_global_limit<a class="headerlink" href="#test_concurrent_tasks_respect_global_limit" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_concurrency_limits-py-test_concurrent_tasks_respect_global_limit"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:267</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:302</code></em></p>
 <p><em>No docstring.</em></p>
 <h5 id="test_max_global_running_limit">test_max_global_running_limit<a class="headerlink" href="#test_max_global_running_limit" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_concurrency_limits-py-test_max_global_running_limit"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:141</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:153</code></em></p>
 <p><em>No docstring.</em></p>
 <h5 id="test_max_type_concurrency_limits">test_max_type_concurrency_limits<a class="headerlink" href="#test_max_type_concurrency_limits" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_concurrency_limits-py-test_max_type_concurrency_limits"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:177</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:196</code></em></p>
 <p><em>No docstring.</em></p>
 <h5 id="test_multi_workers_same_type_rr_distribution">test_multi_workers_same_type_rr_distribution<a class="headerlink" href="#test_multi_workers_same_type_rr_distribution" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_concurrency_limits-py-test_multi_workers_same_type_rr_distribution"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:222</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_concurrency_limits.py:252</code></em></p>
 <p><em>No docstring.</em></p>
 <hr />
 <h3 id="teststest_lease_heartbeat_resumepy">tests/test_lease_heartbeat_resume.py<a class="headerlink" href="#teststest_lease_heartbeat_resumepy" title="Permanent link">&para;</a></h3>
@@ -3594,114 +3594,114 @@ the full pipeline should still complete and produce artifacts at indexer/enriche
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_deferred_retry_ignores_grace_gate">test_deferred_retry_ignores_grace_gate</a></td>
 <td>A DEFERRED retry must not be throttled by discovery grace window.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:234</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:258</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_grace_gate_blocks_then_allows_after_window">test_grace_gate_blocks_then_allows_after_window</a></td>
 <td>Grace window should delay start initially and allow it after the window elapses.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:190</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:209</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_heartbeat_hard_marks_task_failed">test_heartbeat_hard_marks_task_failed</a></td>
 <td>If hard heartbeat window is exceeded, the task should be marked FAILED.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:71</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:77</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_heartbeat_soft_deferred_then_recovers">test_heartbeat_soft_deferred_then_recovers</a></td>
 <td>With a short soft heartbeat window the task becomes DEFERRED, then recovers and finishes.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:37</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:39</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_heartbeat_tolerates_clock_skew">test_heartbeat_tolerates_clock_skew</a></td>
 <td>Worker clock skew should not cause a hard timeout; lease deadlines must be non-decreasing.</td>
 <td>asyncio, cfg</td>
-<td><code>tests/test_lease_heartbeat_resume.py:534</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:556</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_heartbeat_updates_lease_deadline_simple">test_heartbeat_updates_lease_deadline_simple</a></td>
 <td>Heartbeats should move the lease.deadline_ts_ms forward while the node runs.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:320</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:348</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_lease_expiry_cascades_cancel">test_lease_expiry_cascades_cancel</a></td>
 <td>Permanent fail upstream should cascade-cancel downstream nodes.</td>
 <td>asyncio, cfg</td>
-<td><code>tests/test_lease_heartbeat_resume.py:598</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:625</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_no_task_resumed_on_worker_restart">test_no_task_resumed_on_worker_restart</a></td>
 <td>On a cold worker restart there must be no TASK_RESUMED event emitted by the worker.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:266</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:292</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_resume_inflight_worker_restarts_with_local_state">test_resume_inflight_worker_restarts_with_local_state</a></td>
 <td>Restart with the same worker_id: coordinator should adopt inflight work without new epoch.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:103</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:113</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_task_discover_complete_artifacts_skips_node_start">test_task_discover_complete_artifacts_skips_node_start</a></td>
 <td>If artifacts are 'complete' during discovery, node should auto-finish without starting its handler.</td>
 <td>asyncio</td>
-<td><code>tests/test_lease_heartbeat_resume.py:159</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:173</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_lease_heartbeat_resume-py-test_worker_restart_with_new_id_bumps_epoch">test_worker_restart_with_new_id_bumps_epoch</a></td>
 <td>Restart with a new worker_id must bump attempt_epoch; stale heartbeats from the old epoch are ignored.</td>
 <td>asyncio, cfg</td>
-<td><code>tests/test_lease_heartbeat_resume.py:364</code></td>
+<td><code>tests/test_lease_heartbeat_resume.py:394</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_4">Details<a class="headerlink" href="#details_4" title="Permanent link">&para;</a></h4>
 <h5 id="test_deferred_retry_ignores_grace_gate">test_deferred_retry_ignores_grace_gate<a class="headerlink" href="#test_deferred_retry_ignores_grace_gate" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_deferred_retry_ignores_grace_gate"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:234</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:258</code></em></p>
 <p>A DEFERRED retry must not be throttled by discovery grace window.</p>
 <h5 id="test_grace_gate_blocks_then_allows_after_window">test_grace_gate_blocks_then_allows_after_window<a class="headerlink" href="#test_grace_gate_blocks_then_allows_after_window" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_grace_gate_blocks_then_allows_after_window"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:190</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:209</code></em></p>
 <p>Grace window should delay start initially and allow it after the window elapses.</p>
 <h5 id="test_heartbeat_hard_marks_task_failed">test_heartbeat_hard_marks_task_failed<a class="headerlink" href="#test_heartbeat_hard_marks_task_failed" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_heartbeat_hard_marks_task_failed"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:71</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:77</code></em></p>
 <p>If hard heartbeat window is exceeded, the task should be marked FAILED.</p>
 <h5 id="test_heartbeat_soft_deferred_then_recovers">test_heartbeat_soft_deferred_then_recovers<a class="headerlink" href="#test_heartbeat_soft_deferred_then_recovers" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_heartbeat_soft_deferred_then_recovers"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:37</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:39</code></em></p>
 <p>With a short soft heartbeat window the task becomes DEFERRED, then recovers and finishes.</p>
 <h5 id="test_heartbeat_tolerates_clock_skew">test_heartbeat_tolerates_clock_skew<a class="headerlink" href="#test_heartbeat_tolerates_clock_skew" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_heartbeat_tolerates_clock_skew"></a></p>
-<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:534</code></em></p>
+<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:556</code></em></p>
 <p>Worker clock skew should not cause a hard timeout; lease deadlines must be non-decreasing.</p>
 <h5 id="test_heartbeat_updates_lease_deadline_simple">test_heartbeat_updates_lease_deadline_simple<a class="headerlink" href="#test_heartbeat_updates_lease_deadline_simple" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_heartbeat_updates_lease_deadline_simple"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:320</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:348</code></em></p>
 <p>Heartbeats should move the lease.deadline_ts_ms forward while the node runs.</p>
 <h5 id="test_lease_expiry_cascades_cancel">test_lease_expiry_cascades_cancel<a class="headerlink" href="#test_lease_expiry_cascades_cancel" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_lease_expiry_cascades_cancel"></a></p>
-<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:598</code></em></p>
+<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:625</code></em></p>
 <p>Permanent fail upstream should cascade-cancel downstream nodes.</p>
 <h5 id="test_no_task_resumed_on_worker_restart">test_no_task_resumed_on_worker_restart<a class="headerlink" href="#test_no_task_resumed_on_worker_restart" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_no_task_resumed_on_worker_restart"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:266</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:292</code></em></p>
 <p>On a cold worker restart there must be no TASK_RESUMED event emitted by the worker.</p>
 <h5 id="test_resume_inflight_worker_restarts_with_local_state">test_resume_inflight_worker_restarts_with_local_state<a class="headerlink" href="#test_resume_inflight_worker_restarts_with_local_state" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_resume_inflight_worker_restarts_with_local_state"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:103</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:113</code></em></p>
 <p>Restart with the same worker_id: coordinator should adopt inflight work without new epoch.</p>
 <h5 id="test_task_discover_complete_artifacts_skips_node_start">test_task_discover_complete_artifacts_skips_node_start<a class="headerlink" href="#test_task_discover_complete_artifacts_skips_node_start" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_task_discover_complete_artifacts_skips_node_start"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:159</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_lease_heartbeat_resume.py:173</code></em></p>
 <p>If artifacts are 'complete' during discovery, node should auto-finish without starting its handler.</p>
 <h5 id="test_worker_restart_with_new_id_bumps_epoch">test_worker_restart_with_new_id_bumps_epoch<a class="headerlink" href="#test_worker_restart_with_new_id_bumps_epoch" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_lease_heartbeat_resume-py-test_worker_restart_with_new_id_bumps_epoch"></a></p>
-<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:364</code></em></p>
+<p><em>marks: <code>asyncio, cfg</code> • location: <code>tests/test_lease_heartbeat_resume.py:394</code></em></p>
 <p>Restart with a new worker_id must bump attempt_epoch; stale heartbeats from the old epoch are ignored.</p>
 <hr />
 <h3 id="teststest_outbox_deliverypy">tests/test_outbox_delivery.py<a class="headerlink" href="#teststest_outbox_deliverypy" title="Permanent link">&para;</a></h3>
@@ -3721,66 +3721,66 @@ the full pipeline should still complete and produce artifacts at indexer/enriche
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_backoff_caps_with_jitter">test_outbox_backoff_caps_with_jitter</a></td>
 <td>Exponential backoff is capped by max and jitter stays within a reasonable window.</td>
 <td>asyncio, use_outbox, cfg</td>
-<td><code>tests/test_outbox_delivery.py:342</code></td>
+<td><code>tests/test_outbox_delivery.py:366</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_crash_between_send_and_mark_sent">test_outbox_crash_between_send_and_mark_sent</a></td>
 <td>Send succeeds, coordinator crashes before mark(sent) → after restart the outbox may resend, but there is only ONE effective delivery for (topic,key,dedup_id).</td>
 <td>asyncio, use_outbox</td>
-<td><code>tests/test_outbox_delivery.py:193</code></td>
+<td><code>tests/test_outbox_delivery.py:214</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_dedup_survives_restart">test_outbox_dedup_survives_restart</a></td>
 <td>Deduplication by (topic,key,dedup_id) persists across coordinator restart: re-enqueue of the same envelope after restart does not create a second outbox row or send.</td>
 <td>asyncio, use_outbox</td>
-<td><code>tests/test_outbox_delivery.py:285</code></td>
+<td><code>tests/test_outbox_delivery.py:305</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_dlq_after_max_retries">test_outbox_dlq_after_max_retries</a></td>
 <td>After reaching max retries, the outbox row is moved to a terminal state with attempts &gt;= max.</td>
 <td>asyncio, use_outbox, cfg</td>
-<td><code>tests/test_outbox_delivery.py:393</code></td>
+<td><code>tests/test_outbox_delivery.py:419</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_exactly_once_fp_uniqueness">test_outbox_exactly_once_fp_uniqueness</a></td>
 <td>Two enqueues with identical (topic,key,dedup_id) → single outbox row and exactly one real send.</td>
 <td>asyncio</td>
-<td><code>tests/test_outbox_delivery.py:119</code></td>
+<td><code>tests/test_outbox_delivery.py:138</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_outbox_delivery-py-test_outbox_retry_backoff">test_outbox_retry_backoff</a></td>
 <td>First two _raw_send calls fail → outbox goes to 'retry' with exponential backoff (with jitter), then on the 3<sup>rd</sup> attempt becomes 'sent'.</td>
 <td>asyncio</td>
-<td><code>tests/test_outbox_delivery.py:45</code></td>
+<td><code>tests/test_outbox_delivery.py:46</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_5">Details<a class="headerlink" href="#details_5" title="Permanent link">&para;</a></h4>
 <h5 id="test_outbox_backoff_caps_with_jitter">test_outbox_backoff_caps_with_jitter<a class="headerlink" href="#test_outbox_backoff_caps_with_jitter" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_backoff_caps_with_jitter"></a></p>
-<p><em>marks: <code>asyncio, use_outbox, cfg</code> • location: <code>tests/test_outbox_delivery.py:342</code></em></p>
+<p><em>marks: <code>asyncio, use_outbox, cfg</code> • location: <code>tests/test_outbox_delivery.py:366</code></em></p>
 <p>Exponential backoff is capped by max and jitter stays within a reasonable window.</p>
 <h5 id="test_outbox_crash_between_send_and_mark_sent">test_outbox_crash_between_send_and_mark_sent<a class="headerlink" href="#test_outbox_crash_between_send_and_mark_sent" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_crash_between_send_and_mark_sent"></a></p>
-<p><em>marks: <code>asyncio, use_outbox</code> • location: <code>tests/test_outbox_delivery.py:193</code></em></p>
+<p><em>marks: <code>asyncio, use_outbox</code> • location: <code>tests/test_outbox_delivery.py:214</code></em></p>
 <p>Send succeeds, coordinator crashes before mark(sent) → after restart the outbox may resend,
 but there is only ONE effective delivery for (topic,key,dedup_id).</p>
 <h5 id="test_outbox_dedup_survives_restart">test_outbox_dedup_survives_restart<a class="headerlink" href="#test_outbox_dedup_survives_restart" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_dedup_survives_restart"></a></p>
-<p><em>marks: <code>asyncio, use_outbox</code> • location: <code>tests/test_outbox_delivery.py:285</code></em></p>
+<p><em>marks: <code>asyncio, use_outbox</code> • location: <code>tests/test_outbox_delivery.py:305</code></em></p>
 <p>Deduplication by (topic,key,dedup_id) persists across coordinator restart:
 re-enqueue of the same envelope after restart does not create a second outbox row or send.</p>
 <h5 id="test_outbox_dlq_after_max_retries">test_outbox_dlq_after_max_retries<a class="headerlink" href="#test_outbox_dlq_after_max_retries" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_dlq_after_max_retries"></a></p>
-<p><em>marks: <code>asyncio, use_outbox, cfg</code> • location: <code>tests/test_outbox_delivery.py:393</code></em></p>
+<p><em>marks: <code>asyncio, use_outbox, cfg</code> • location: <code>tests/test_outbox_delivery.py:419</code></em></p>
 <p>After reaching max retries, the outbox row is moved to a terminal state with attempts &gt;= max.</p>
 <h5 id="test_outbox_exactly_once_fp_uniqueness">test_outbox_exactly_once_fp_uniqueness<a class="headerlink" href="#test_outbox_exactly_once_fp_uniqueness" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_exactly_once_fp_uniqueness"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_outbox_delivery.py:119</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_outbox_delivery.py:138</code></em></p>
 <p>Two enqueues with identical (topic,key,dedup_id) → single outbox row and exactly one real send.</p>
 <h5 id="test_outbox_retry_backoff">test_outbox_retry_backoff<a class="headerlink" href="#test_outbox_retry_backoff" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_outbox_delivery-py-test_outbox_retry_backoff"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_outbox_delivery.py:45</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_outbox_delivery.py:46</code></em></p>
 <p>First two _raw_send calls fail → outbox goes to 'retry' with exponential backoff (with jitter),
 then on the 3<sup>rd</sup> attempt becomes 'sent'.</p>
 <hr />
@@ -3842,79 +3842,79 @@ restart adoption, cascade cancel, and heartbeat/lease updates.</p>
 <td><a href="#tests-test_reliability_failures-py-test_coordinator_restart_adopts_inflight_without_new_epoch">test_coordinator_restart_adopts_inflight_without_new_epoch</a></td>
 <td>When the coordinator restarts, it should adopt in-flight work without incrementing the worker's attempt_epoch unnecessarily (i.e., source keeps epoch=1).</td>
 <td>asyncio</td>
-<td><code>tests/test_reliability_failures.py:202</code></td>
+<td><code>tests/test_reliability_failures.py:218</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_explicit_cascade_cancel_moves_node_to_deferred">test_explicit_cascade_cancel_moves_node_to_deferred</a></td>
 <td>Explicit cascade cancel should move a running node to a cancelling/deferred/queued state within the configured cancel_grace window.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_reliability_failures.py:249</code></td>
+<td><code>tests/test_reliability_failures.py:273</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_heartbeat_updates_lease_deadline">test_heartbeat_updates_lease_deadline</a></td>
 <td>Heartbeats from a worker must extend the lease deadline in the task document.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_reliability_failures.py:290</code></td>
+<td><code>tests/test_reliability_failures.py:322</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_idempotent_metrics_on_duplicate_events">test_idempotent_metrics_on_duplicate_events</a></td>
 <td>Duplicated STATUS events (BATCH_OK/TASK_DONE) must not double-count metrics.</td>
 <td>asyncio</td>
-<td><code>tests/test_reliability_failures.py:45</code></td>
+<td><code>tests/test_reliability_failures.py:36</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_permanent_fail_cascades_cancel_and_task_failed">test_permanent_fail_cascades_cancel_and_task_failed</a></td>
 <td>Permanent failure in an upstream node should cause the task to fail, while dependents get cancelled/deferred/queued depending on race windows.</td>
 <td>cfg, asyncio</td>
-<td><code>tests/test_reliability_failures.py:119</code></td>
+<td><code>tests/test_reliability_failures.py:125</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_status_fencing_ignores_stale_epoch">test_status_fencing_ignores_stale_epoch</a></td>
 <td>Status fencing must ignore events from a stale attempt_epoch.</td>
 <td>asyncio</td>
-<td><code>tests/test_reliability_failures.py:158</code></td>
+<td><code>tests/test_reliability_failures.py:169</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_reliability_failures-py-test_transient_failure_deferred_then_retry">test_transient_failure_deferred_then_retry</a></td>
 <td>A transient error should defer the node and succeed on retry according to retry_policy (max&gt;=2).</td>
 <td>asyncio</td>
-<td><code>tests/test_reliability_failures.py:86</code></td>
+<td><code>tests/test_reliability_failures.py:83</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_7">Details<a class="headerlink" href="#details_7" title="Permanent link">&para;</a></h4>
 <h5 id="test_coordinator_restart_adopts_inflight_without_new_epoch">test_coordinator_restart_adopts_inflight_without_new_epoch<a class="headerlink" href="#test_coordinator_restart_adopts_inflight_without_new_epoch" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_coordinator_restart_adopts_inflight_without_new_epoch"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:202</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:218</code></em></p>
 <p>When the coordinator restarts, it should adopt in-flight work without incrementing
 the worker's attempt_epoch unnecessarily (i.e., source keeps epoch=1).</p>
 <h5 id="test_explicit_cascade_cancel_moves_node_to_deferred">test_explicit_cascade_cancel_moves_node_to_deferred<a class="headerlink" href="#test_explicit_cascade_cancel_moves_node_to_deferred" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_explicit_cascade_cancel_moves_node_to_deferred"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:249</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:273</code></em></p>
 <p>Explicit cascade cancel should move a running node to a cancelling/deferred/queued state
 within the configured cancel_grace window.</p>
 <h5 id="test_heartbeat_updates_lease_deadline">test_heartbeat_updates_lease_deadline<a class="headerlink" href="#test_heartbeat_updates_lease_deadline" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_heartbeat_updates_lease_deadline"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:290</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:322</code></em></p>
 <p>Heartbeats from a worker must extend the lease deadline in the task document.</p>
 <h5 id="test_idempotent_metrics_on_duplicate_events">test_idempotent_metrics_on_duplicate_events<a class="headerlink" href="#test_idempotent_metrics_on_duplicate_events" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_idempotent_metrics_on_duplicate_events"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:45</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:36</code></em></p>
 <p>Duplicated STATUS events (BATCH_OK/TASK_DONE) must not double-count metrics.
 We duplicate STATUS envelopes at the Kafka level; aggregator must remain stable.</p>
 <h5 id="test_permanent_fail_cascades_cancel_and_task_failed">test_permanent_fail_cascades_cancel_and_task_failed<a class="headerlink" href="#test_permanent_fail_cascades_cancel_and_task_failed" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_permanent_fail_cascades_cancel_and_task_failed"></a></p>
-<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:119</code></em></p>
+<p><em>marks: <code>cfg, asyncio</code> • location: <code>tests/test_reliability_failures.py:125</code></em></p>
 <p>Permanent failure in an upstream node should cause the task to fail,
 while dependents get cancelled/deferred/queued depending on race windows.</p>
 <h5 id="test_status_fencing_ignores_stale_epoch">test_status_fencing_ignores_stale_epoch<a class="headerlink" href="#test_status_fencing_ignores_stale_epoch" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_status_fencing_ignores_stale_epoch"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:158</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:169</code></em></p>
 <p>Status fencing must ignore events from a stale attempt_epoch.
 We finish the task, then send a forged event with attempt_epoch=0; stats must remain unchanged.</p>
 <h5 id="test_transient_failure_deferred_then_retry">test_transient_failure_deferred_then_retry<a class="headerlink" href="#test_transient_failure_deferred_then_retry" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_reliability_failures-py-test_transient_failure_deferred_then_retry"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:86</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_reliability_failures.py:83</code></em></p>
 <p>A transient error should defer the node and succeed on retry according to retry_policy (max&gt;=2).</p>
 <hr />
 <h3 id="teststest_scheduler_fanin_routingpy">tests/test_scheduler_fanin_routing.py<a class="headerlink" href="#teststest_scheduler_fanin_routingpy" title="Permanent link">&para;</a></h3>
@@ -3941,81 +3941,81 @@ We finish the task, then send a forged event with attempt_epoch=0; stats must re
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_coordinator_fn_merge_without_worker">test_coordinator_fn_merge_without_worker</a></td>
 <td>coordinator_fn node should run without a worker and produce artifacts that a downstream analyzer can consume via pull.from_artifacts.</td>
 <td>asyncio</td>
-<td><code>tests/test_scheduler_fanin_routing.py:285</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:294</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_edges_vs_routing_priority">test_edges_vs_routing_priority</a></td>
 <td>If explicit graph edges are present and a node also has routing.on_success, edges should take precedence (routing target should not run).</td>
 <td>asyncio, xfail</td>
-<td><code>tests/test_scheduler_fanin_routing.py:223</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:230</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_fanin_all_waits_all_parents">test_fanin_all_waits_all_parents</a></td>
 <td>Fan-in ALL: without start_when hint, downstream should only start after both parents are finished.</td>
 <td>asyncio</td>
-<td><code>tests/test_scheduler_fanin_routing.py:126</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:127</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_fanin_any_starts_early">test_fanin_any_starts_early</a></td>
 <td>Fan-in ANY: downstream should start as soon as at least one parent streams (start_when='first_batch'), even if other parents are not yet finished.</td>
 <td>asyncio</td>
-<td><code>tests/test_scheduler_fanin_routing.py:70</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:69</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_fanin_count_n">test_fanin_count_n</a></td>
 <td>Fan-in COUNT:N placeholder: downstream should start when at least N parents are ready.</td>
 <td>asyncio, xfail</td>
-<td><code>tests/test_scheduler_fanin_routing.py:173</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:176</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_fanout_one_upstream_two_downstreams_mixed_start_when">test_fanout_one_upstream_two_downstreams_mixed_start_when</a></td>
 <td>One upstream → two downstreams: A has start_when=first_batch (starts early), B has no start_when (waits for completion).</td>
 <td>asyncio</td>
-<td><code>tests/test_scheduler_fanin_routing.py:417</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:431</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_scheduler_fanin_routing-py-test_routing_on_failure_triggers_remediator_only">test_routing_on_failure_triggers_remediator_only</a></td>
 <td>On upstream TASK_FAILED(permanent=True), only the 'on_failure' remediator should run; 'on_success' must not.</td>
 <td>asyncio, xfail</td>
-<td><code>tests/test_scheduler_fanin_routing.py:345</code></td>
+<td><code>tests/test_scheduler_fanin_routing.py:358</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_8">Details<a class="headerlink" href="#details_8" title="Permanent link">&para;</a></h4>
 <h5 id="test_coordinator_fn_merge_without_worker">test_coordinator_fn_merge_without_worker<a class="headerlink" href="#test_coordinator_fn_merge_without_worker" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_coordinator_fn_merge_without_worker"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:285</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:294</code></em></p>
 <p>coordinator_fn node should run without a worker and produce artifacts that
 a downstream analyzer can consume via pull.from_artifacts.</p>
 <h5 id="test_edges_vs_routing_priority">test_edges_vs_routing_priority<a class="headerlink" href="#test_edges_vs_routing_priority" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_edges_vs_routing_priority"></a></p>
-<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:223</code></em></p>
+<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:230</code></em></p>
 <p>If explicit graph edges are present and a node also has routing.on_success,
 edges should take precedence (routing target should not run).</p>
 <h5 id="test_fanin_all_waits_all_parents">test_fanin_all_waits_all_parents<a class="headerlink" href="#test_fanin_all_waits_all_parents" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_fanin_all_waits_all_parents"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:126</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:127</code></em></p>
 <p>Fan-in ALL: without start_when hint, downstream should only start after
 both parents are finished.</p>
 <h5 id="test_fanin_any_starts_early">test_fanin_any_starts_early<a class="headerlink" href="#test_fanin_any_starts_early" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_fanin_any_starts_early"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:70</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:69</code></em></p>
 <p>Fan-in ANY: downstream should start as soon as at least one parent streams
 (start_when='first_batch'), even if other parents are not yet finished.
 We run a single 'indexer' worker so upstream parents execute sequentially.</p>
 <h5 id="test_fanin_count_n">test_fanin_count_n<a class="headerlink" href="#test_fanin_count_n" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_fanin_count_n"></a></p>
-<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:173</code></em></p>
+<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:176</code></em></p>
 <p>Fan-in COUNT:N placeholder: downstream should start when at least N parents are ready.
 Marked xfail until coordinator supports 'count:n'.</p>
 <h5 id="test_fanout_one_upstream_two_downstreams_mixed_start_when">test_fanout_one_upstream_two_downstreams_mixed_start_when<a class="headerlink" href="#test_fanout_one_upstream_two_downstreams_mixed_start_when" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_fanout_one_upstream_two_downstreams_mixed_start_when"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:417</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_scheduler_fanin_routing.py:431</code></em></p>
 <p>One upstream → two downstreams: A has start_when=first_batch (starts early),
 B has no start_when (waits for completion).</p>
 <h5 id="test_routing_on_failure_triggers_remediator_only">test_routing_on_failure_triggers_remediator_only<a class="headerlink" href="#test_routing_on_failure_triggers_remediator_only" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_scheduler_fanin_routing-py-test_routing_on_failure_triggers_remediator_only"></a></p>
-<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:345</code></em></p>
+<p><em>marks: <code>asyncio, xfail</code> • location: <code>tests/test_scheduler_fanin_routing.py:358</code></em></p>
 <p>On upstream TASK_FAILED(permanent=True), only the 'on_failure' remediator should run; 'on_success' must not.</p>
 <hr />
 <h3 id="teststest_streaming_syncpy">tests/test_streaming_sync.py<a class="headerlink" href="#teststest_streaming_syncpy" title="Permanent link">&para;</a></h3>
@@ -4043,122 +4043,122 @@ B has no start_when (waits for completion).</p>
 <td><a href="#tests-test_streaming_sync-py-test_after_upstream_complete_delays_start">test_after_upstream_complete_delays_start</a></td>
 <td>Without start_when, the downstream must not start until the upstream is fully finished.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:126</code></td>
+<td><code>tests/test_streaming_sync.py:134</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_cross_talk_guard">test_metrics_cross_talk_guard</a></td>
 <td>Two concurrent tasks (same node_ids across different task_ids) do not interfere: final 'count' values are isolated per task.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:616</code></td>
+<td><code>tests/test_streaming_sync.py:644</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_dedup_persists_across_coord_restart">test_metrics_dedup_persists_across_coord_restart</a></td>
 <td>Metric deduplication survives a coordinator restart: duplicates of STATUS (BATCH_OK/TASK_DONE) sent during the restart must not double-count.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:541</code></td>
+<td><code>tests/test_streaming_sync.py:567</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_idempotent_on_duplicate_status_events">test_metrics_idempotent_on_duplicate_status_events</a></td>
 <td>Duplicate STATUS events (BATCH_OK / TASK_DONE) must not double-increment aggregated metrics.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:408</code></td>
+<td><code>tests/test_streaming_sync.py:433</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_isolation_between_tasks">test_metrics_isolation_between_tasks</a></td>
 <td>Two back-to-back tasks must keep metric aggregation isolated per task document.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:365</code></td>
+<td><code>tests/test_streaming_sync.py:388</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_multistream_exact_sum">test_metrics_multistream_exact_sum</a></td>
 <td>Three upstreams -&gt; one downstream: analyzer's aggregated 'count' must equal the sum of all totals.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:279</code></td>
+<td><code>tests/test_streaming_sync.py:300</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_partial_batches_exact_count">test_metrics_partial_batches_exact_count</a></td>
 <td>With a remainder in the last upstream batch, analyzer's 'count' must still exactly equal total.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:325</code></td>
+<td><code>tests/test_streaming_sync.py:347</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_metrics_single_stream_exact_count">test_metrics_single_stream_exact_count</a></td>
 <td>Single upstream -&gt; single downstream: analyzer's aggregated 'count' must equal the total items.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:239</code></td>
+<td><code>tests/test_streaming_sync.py:259</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_multistream_fanin_stream_to_one_downstream">test_multistream_fanin_stream_to_one_downstream</a></td>
 <td>Multi-stream fan-in: three upstream indexers stream into one analyzer.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:175</code></td>
+<td><code>tests/test_streaming_sync.py:188</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_start_when_first_batch_starts_early">test_start_when_first_batch_starts_early</a></td>
 <td>Downstream should start while upstream is still running when <code>start_when=first_batch</code> is set.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:74</code></td>
+<td><code>tests/test_streaming_sync.py:76</code></td>
 </tr>
 <tr>
 <td><a href="#tests-test_streaming_sync-py-test_status_out_of_order_does_not_break_aggregation">test_status_out_of_order_does_not_break_aggregation</a></td>
 <td>BATCH_OK STATUS events arrive out of order → the aggregated metric remains correct.</td>
 <td>asyncio</td>
-<td><code>tests/test_streaming_sync.py:468</code></td>
+<td><code>tests/test_streaming_sync.py:494</code></td>
 </tr>
 </tbody>
 </table>
 <h4 id="details_9">Details<a class="headerlink" href="#details_9" title="Permanent link">&para;</a></h4>
 <h5 id="test_after_upstream_complete_delays_start">test_after_upstream_complete_delays_start<a class="headerlink" href="#test_after_upstream_complete_delays_start" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_after_upstream_complete_delays_start"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:126</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:134</code></em></p>
 <p>Without start_when, the downstream must not start until the upstream is fully finished.
 We first assert a negative hold window while the upstream is running, then assert the
 downstream starts and finishes after the upstream completes.</p>
 <h5 id="test_metrics_cross_talk_guard">test_metrics_cross_talk_guard<a class="headerlink" href="#test_metrics_cross_talk_guard" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_cross_talk_guard"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:616</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:644</code></em></p>
 <p>Two concurrent tasks (same node_ids across different task_ids) do not interfere:
 final 'count' values are isolated per task.</p>
 <h5 id="test_metrics_dedup_persists_across_coord_restart">test_metrics_dedup_persists_across_coord_restart<a class="headerlink" href="#test_metrics_dedup_persists_across_coord_restart" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_dedup_persists_across_coord_restart"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:541</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:567</code></em></p>
 <p>Metric deduplication survives a coordinator restart: duplicates of STATUS
 (BATCH_OK/TASK_DONE) sent during the restart must not double-count.
-Skips if the fixture <code>coord</code> has no <code>restart</code> method.</p>
+Skips if the fixture <code>coord</code> has no <code>restart</code> method`.</p>
 <h5 id="test_metrics_idempotent_on_duplicate_status_events">test_metrics_idempotent_on_duplicate_status_events<a class="headerlink" href="#test_metrics_idempotent_on_duplicate_status_events" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_idempotent_on_duplicate_status_events"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:408</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:433</code></em></p>
 <p>Duplicate STATUS events (BATCH_OK / TASK_DONE) must not double-increment aggregated metrics.</p>
 <p>We monkeypatch AIOKafkaProducerMock.send_and_wait to produce the same STATUS event twice
 for status topics. The Coordinator should deduplicate by envelope key and keep metrics stable.</p>
 <h5 id="test_metrics_isolation_between_tasks">test_metrics_isolation_between_tasks<a class="headerlink" href="#test_metrics_isolation_between_tasks" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_isolation_between_tasks"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:365</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:388</code></em></p>
 <p>Two back-to-back tasks must keep metric aggregation isolated per task document.</p>
 <h5 id="test_metrics_multistream_exact_sum">test_metrics_multistream_exact_sum<a class="headerlink" href="#test_metrics_multistream_exact_sum" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_multistream_exact_sum"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:279</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:300</code></em></p>
 <p>Three upstreams -&gt; one downstream: analyzer's aggregated 'count' must equal the sum of all totals.</p>
 <h5 id="test_metrics_partial_batches_exact_count">test_metrics_partial_batches_exact_count<a class="headerlink" href="#test_metrics_partial_batches_exact_count" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_partial_batches_exact_count"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:325</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:347</code></em></p>
 <p>With a remainder in the last upstream batch, analyzer's 'count' must still exactly equal total.</p>
 <h5 id="test_metrics_single_stream_exact_count">test_metrics_single_stream_exact_count<a class="headerlink" href="#test_metrics_single_stream_exact_count" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_metrics_single_stream_exact_count"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:239</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:259</code></em></p>
 <p>Single upstream -&gt; single downstream: analyzer's aggregated 'count' must equal the total items.</p>
 <h5 id="test_multistream_fanin_stream_to_one_downstream">test_multistream_fanin_stream_to_one_downstream<a class="headerlink" href="#test_multistream_fanin_stream_to_one_downstream" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_multistream_fanin_stream_to_one_downstream"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:175</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:188</code></em></p>
 <p>Multi-stream fan-in: three upstream indexers stream into one analyzer.
 Analyzer should start early on first batch and eventually see the full flow.</p>
 <h5 id="test_start_when_first_batch_starts_early">test_start_when_first_batch_starts_early<a class="headerlink" href="#test_start_when_first_batch_starts_early" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_start_when_first_batch_starts_early"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:74</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:76</code></em></p>
 <p>Downstream should start while upstream is still running when <code>start_when=first_batch</code> is set.</p>
 <h5 id="test_status_out_of_order_does_not_break_aggregation">test_status_out_of_order_does_not_break_aggregation<a class="headerlink" href="#test_status_out_of_order_does_not_break_aggregation" title="Permanent link">&para;</a></h5>
 <p><a id="tests-test_streaming_sync-py-test_status_out_of_order_does_not_break_aggregation"></a></p>
-<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:468</code></em></p>
+<p><em>marks: <code>asyncio</code> • location: <code>tests/test_streaming_sync.py:494</code></em></p>
 <p>BATCH_OK STATUS events arrive out of order → the aggregated metric remains correct.
 We hold the first BATCH_OK so later ones arrive first.</p>
 
