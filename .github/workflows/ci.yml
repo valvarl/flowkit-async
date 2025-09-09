@@ -275,16 +275,29 @@ jobs:
           path: reports/*
           if-no-files-found: warn
 
-  docs_check:
-    name: Docs Build (strict)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: pip install mkdocs mkdocs-material mkdocstrings[python] ruff mike
-      - run: mkdocs build --clean --strict
+docs_check:
+  name: Docs Build (strict)
+  runs-on: ubuntu-latest
+  timeout-minutes: 10
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: |
+          docs/requirements.txt
+          pyproject.toml
+
+    - name: Upgrade pip
+      run: python -m pip install --upgrade pip
+
+    - name: Install project (editable)
+      run: pip install -e .
+
+    - name: Install docs deps
+      run: pip install -r docs/requirements.txt
+
+    - name: Build docs (strict)
+      run: mkdocs build --clean --strict
