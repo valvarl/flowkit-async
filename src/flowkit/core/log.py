@@ -9,7 +9,7 @@ import threading
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 __all__ = [
     "bind_context",
@@ -59,29 +59,31 @@ def log_context(**fields: Any):
 
 # ---------- JSON formatter ----------
 
-_STD_ATTRS = {
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "asctime",
-}
+_STD_ATTRS: Final[frozenset[str]] = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "asctime",
+    }
+)
 
 
 def _iso_utc_ms(ts: float) -> str:
@@ -214,27 +216,26 @@ class _KwExtraAdapter(logging.LoggerAdapter):
     without TypeError from logging.
     """
 
-    _reserved: ClassVar[frozenset[str]] = frozenset({"exc_info", "stack_info", "stacklevel", "extra"})
+    _allowed_passthrough: ClassVar[frozenset[str]] = frozenset({"exc_info", "stack_info", "stacklevel", "extra"})
+    _logrecord_attrs: ClassVar[frozenset[str]] = _STD_ATTRS
 
     def process(self, msg, kwargs):
         extra = kwargs.get("extra")
-        if extra is None:
+        if extra is None or not isinstance(extra, dict):
             extra = {}
-        elif not isinstance(extra, dict):
-            extra = dict(extra)
 
-        # move all non-reserved kwargs into extra
         moved = {}
         for k in list(kwargs.keys()):
-            if k in self._reserved:
+            if k in self._allowed_passthrough:
                 continue
             moved[k] = kwargs.pop(k)
 
-        if moved:
-            # do not overwrite existing keys in extra
-            for k, v in moved.items():
-                if k not in extra:
-                    extra[k] = v
+        for k, v in moved.items():
+            key = k
+            if key in self._logrecord_attrs:
+                key = f"field_{key}"
+            if key not in extra:
+                extra[key] = v
 
         kwargs["extra"] = extra
         return msg, kwargs

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from flowkit.core.log import log_context
 from tests.helpers import AIOKafkaConsumerMock
 from tests.helpers.graph import prime_graph, wait_task_finished
 from tests.helpers.handlers import build_sleepy_handler
@@ -50,7 +51,7 @@ async def gather_running_counts(db) -> tuple[int, dict[str, int]]:
 
 
 @pytest_asyncio.fixture
-async def coord_factory(env_and_imports, inmemory_db, coord_cfg):
+async def coord_factory(env_and_imports, inmemory_db, coord_cfg, tlog):
     """
     Returns a Coordinator factory allowing to set limits before start.
 
@@ -66,23 +67,32 @@ async def coord_factory(env_and_imports, inmemory_db, coord_cfg):
         # 1) module-level attributes (legacy path)
         if hasattr(cd, name):
             setattr(cd, name, value)
+            tlog.debug("limit.applied.module", event="limit.applied.module", name=name, value=value)
             return True
         # 2) config fields (new path)
         if hasattr(coord_cfg, name.lower()):
             setattr(coord_cfg, name.lower(), value)
+            tlog.debug("limit.applied.cfg", event="limit.applied.cfg", name=name.lower(), value=value)
             return True
+        tlog.debug("limit.unsupported", event="limit.unsupported", name=name, value=value)
         return False
 
     async def _spawn(**limits):
         # apply requested limits before start
         unsupported = [k for k, v in limits.items() if not _apply_limit(k, v)]
         if unsupported:
-            # asked to set a limit but Coordinator does not support it → mark as xfail
+            tlog.warning(
+                "limits.xfail",
+                event="limits.xfail",
+                unsupported=unsupported,
+                note="Coordinator doesn't support these limits",
+            )
             pytest.xfail(f"Coordinator doesn't support limits: {unsupported}")
 
         c = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
         await c.start()
         started.append(c)
+        tlog.debug("coord.started", event="coord.started", limits=limits)
         return c
 
     try:
@@ -92,20 +102,22 @@ async def coord_factory(env_and_imports, inmemory_db, coord_cfg):
         for c in reversed(started):
             try:
                 await c.stop()
-            except Exception:
-                pass
+                tlog.debug("coord.stopped", event="coord.stopped")
+            except Exception as e:
+                tlog.error("coord.stop.error", event="coord.stop.error", err=str(e))
 
 
 # ───────────────────────── Workers fixture ─────────────────────────
 
 
 @pytest_asyncio.fixture
-async def sleepy_handlers(inmemory_db):
+async def sleepy_handlers(inmemory_db, tlog):
     """
     Ready-to-use test handlers: slow (0.30s/batch) and fast (0.10s/batch).
     """
     slow = build_sleepy_handler(db=inmemory_db, role="slow", batches=1, sleep_s=0.30)
     fast = build_sleepy_handler(db=inmemory_db, role="fast", batches=1, sleep_s=0.10)
+    tlog.debug("handlers.ready", event="handlers.ready", roles={"slow": "0.30s", "fast": "0.10s"})
     return {"slow": slow, "fast": fast}
 
 
@@ -138,18 +150,23 @@ def graph_two_types(slow_n: int, fast_n: int) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_max_global_running_limit(env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers):
+async def test_max_global_running_limit(
+    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers, tlog
+):
+    tlog.debug("test.start", event="test.start", test_name="max_global_running_limit")
     cd, _ = env_and_imports
     coord = await coord_factory(MAX_GLOBAL_RUNNING=2)  # global limit = 2
 
     # 5 independent "slow" nodes
     g = prime_graph(cd, graph_many_roots("slow", 5))
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", task_id=tid, nodes=5)
 
     # 3 "slow" workers (enough resources to exceed the limit if it were not enforced)
     await worker_factory(("slow", sleepy_handlers["slow"]))
     await worker_factory(("slow", sleepy_handlers["slow"]))
     await worker_factory(("slow", sleepy_handlers["slow"]))
+    tlog.debug("workers.started", event="workers.started", roles=[("slow", 3)])
 
     # observe parallelism dynamics
     max_running = 0
@@ -163,20 +180,23 @@ async def test_max_global_running_limit(env_and_imports, inmemory_db, coord_fact
             await asyncio.sleep(0.03)
 
     mon = asyncio.create_task(monitor())
-    await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=10.0)
+    with log_context(task_id=tid):
+        await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=10.0)
     mon.cancel()
     try:
         await mon
     except Exception:
         pass
 
+    tlog.debug("limit.observed", event="limit.observed", max_running=max_running, limit=2)
     assert max_running <= 2, f"MAX_GLOBAL_RUNNING violated, max_running={max_running}"
 
 
 @pytest.mark.asyncio
 async def test_max_type_concurrency_limits(
-    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers
+    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers, tlog
 ):
+    tlog.debug("test.start", event="test.start", test_name="max_type_concurrency_limits")
     cd, _ = env_and_imports
 
     # If Coordinator does not support per-type limits — xfail inside the factory
@@ -184,6 +204,7 @@ async def test_max_type_concurrency_limits(
 
     g = prime_graph(cd, graph_two_types(slow_n=4, fast_n=5))
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", task_id=tid, slow=4, fast=5)
 
     # start workers with a margin
     await worker_factory(("slow", sleepy_handlers["slow"]))
@@ -191,6 +212,7 @@ async def test_max_type_concurrency_limits(
     await worker_factory(("fast", sleepy_handlers["fast"]))
     await worker_factory(("fast", sleepy_handlers["fast"]))
     await worker_factory(("fast", sleepy_handlers["fast"]))
+    tlog.debug("workers.started", event="workers.started", roles={"slow": 2, "fast": 3})
 
     max_running_total = 0
     max_running_slow = 0
@@ -207,31 +229,42 @@ async def test_max_type_concurrency_limits(
             await asyncio.sleep(0.03)
 
     mon = asyncio.create_task(monitor())
-    await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=12.0)
+    with log_context(task_id=tid):
+        await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=12.0)
     mon.cancel()
     try:
         await mon
     except Exception:
         pass
 
+    tlog.debug(
+        "limits.observed",
+        event="limits.observed",
+        max_total=max_running_total,
+        max_slow=max_running_slow,
+        max_fast=max_running_fast,
+    )
     assert max_running_slow <= 1, f"slow type concurrency violated: {max_running_slow}"
     assert max_running_fast <= 2, f"fast type concurrency violated: {max_running_fast}"
 
 
 @pytest.mark.asyncio
 async def test_multi_workers_same_type_rr_distribution(
-    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers
+    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers, tlog
 ):
+    tlog.debug("test.start", event="test.start", test_name="multi_workers_same_type_rr_distribution")
     cd, _ = env_and_imports
     coord = await coord_factory(MAX_GLOBAL_RUNNING=99)
 
     # 6 independent "slow" nodes
     g = prime_graph(cd, graph_many_roots("slow", 6))
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", task_id=tid, nodes=6)
 
     # two workers of the same type
     await worker_factory(("slow", sleepy_handlers["slow"]))
     await worker_factory(("slow", sleepy_handlers["slow"]))
+    tlog.debug("workers.started", event="workers.started", roles={"slow": 2})
 
     # spy status topic 'slow' — collect TASK_ACCEPTED by worker_id
     consumer = AIOKafkaConsumerMock("status.slow.v1", group_id="test.spy")
@@ -251,7 +284,8 @@ async def test_multi_workers_same_type_rr_distribution(
             await asyncio.sleep(0.001)
 
     spy_task = asyncio.create_task(spy())
-    await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=10.0)
+    with log_context(task_id=tid):
+        await wait_all_tasks_finished(inmemory_db, [tid], timeout_s=10.0)
     spy_task.cancel()
     try:
         await spy_task
@@ -259,14 +293,16 @@ async def test_multi_workers_same_type_rr_distribution(
         pass
     await consumer.stop()
 
+    tlog.debug("distribution.observed", event="distribution.observed", workers=list(seen_workers))
     # at least two distinct workers should have accepted different nodes
     assert len(seen_workers) >= 2, f"expected distribution across >=2 workers, got {seen_workers}"
 
 
 @pytest.mark.asyncio
 async def test_concurrent_tasks_respect_global_limit(
-    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers
+    env_and_imports, inmemory_db, coord_factory, worker_factory, sleepy_handlers, tlog
 ):
+    tlog.debug("test.start", event="test.start", test_name="concurrent_tasks_respect_global_limit")
     cd, _ = env_and_imports
     coord = await coord_factory(MAX_GLOBAL_RUNNING=2)  # global limit = 2
 
@@ -275,11 +311,13 @@ async def test_concurrent_tasks_respect_global_limit(
     g2 = prime_graph(cd, graph_many_roots("slow", 5))
     t1 = await coord.create_task(params={}, graph=g1)
     t2 = await coord.create_task(params={}, graph=g2)
+    tlog.debug("tasks.created", event="tasks.created", task_ids=[t1, t2], nodes={"t1": 4, "t2": 5})
 
     # 3 "slow" workers
     await worker_factory(("slow", sleepy_handlers["slow"]))
     await worker_factory(("slow", sleepy_handlers["slow"]))
     await worker_factory(("slow", sleepy_handlers["slow"]))
+    tlog.debug("workers.started", event="workers.started", roles={"slow": 3})
 
     max_running = 0
 
@@ -292,11 +330,13 @@ async def test_concurrent_tasks_respect_global_limit(
             await asyncio.sleep(0.03)
 
     mon = asyncio.create_task(monitor())
-    await wait_all_tasks_finished(inmemory_db, [t1, t2], timeout_s=14.0)
+    with log_context(task_id=[t1, t2]):
+        await wait_all_tasks_finished(inmemory_db, [t1, t2], timeout_s=14.0)
     mon.cancel()
     try:
         await mon
     except Exception:
         pass
 
+    tlog.debug("limit.observed", event="limit.observed", max_running=max_running, limit=2)
     assert max_running <= 2, f"global limit violated across concurrent tasks: {max_running}"

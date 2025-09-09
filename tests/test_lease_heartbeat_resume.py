@@ -1,3 +1,4 @@
+# tests/test_heartbeat_and_resume.py
 """
 Heartbeat / grace-window / resume tests.
 
@@ -19,6 +20,7 @@ from time import time
 
 import pytest
 
+from flowkit.core.log import log_context
 from tests.helpers import wait_task_finished
 from tests.helpers.graph import make_graph, node_by_id, prime_graph
 from tests.helpers.handlers import (
@@ -34,9 +36,10 @@ pytestmark = pytest.mark.worker_types("sleepy,noop,flaky")
 
 @pytest.mark.cfg(coord={"heartbeat_soft_sec": 0.4, "heartbeat_hard_sec": 5.0}, worker={"hb_interval_sec": 1.0})
 @pytest.mark.asyncio
-async def test_heartbeat_soft_deferred_then_recovers(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_heartbeat_soft_deferred_then_recovers(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """With a short soft heartbeat window the task becomes DEFERRED, then recovers and finishes."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="heartbeat_soft_deferred_then_recovers")
 
     # Sleepy role: slow processing so heartbeats lag behind soft window.
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=1.6)))
@@ -49,6 +52,7 @@ async def test_heartbeat_soft_deferred_then_recovers(env_and_imports, inmemory_d
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     async def saw_deferred(timeout=3.0) -> bool:  # noqa: ASYNC109
         t0 = time()
@@ -59,18 +63,21 @@ async def test_heartbeat_soft_deferred_then_recovers(env_and_imports, inmemory_d
             await asyncio.sleep(0.03)
         return False
 
-    assert await saw_deferred(), "expected task to become deferred on SOFT heartbeat"
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=8.0)
-    assert str(tdoc.get("status")) == str(cd.RunState.finished)
-    node = node_by_id(tdoc, "s")
-    assert str(node.get("status")) == str(cd.RunState.finished)
+    with log_context(task_id=task_id):
+        assert await saw_deferred(), "expected task to become deferred on SOFT heartbeat"
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=8.0)
+        tlog.debug("task.finished", event="task.finished", status=str(tdoc.get("status")))
+        assert str(tdoc.get("status")) == str(cd.RunState.finished)
+        node = node_by_id(tdoc, "s")
+        assert str(node.get("status")) == str(cd.RunState.finished)
 
 
 @pytest.mark.cfg(coord={"heartbeat_soft_sec": 0.2, "heartbeat_hard_sec": 0.5}, worker={"hb_interval_sec": 10.0})
 @pytest.mark.asyncio
-async def test_heartbeat_hard_marks_task_failed(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_heartbeat_hard_marks_task_failed(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """If hard heartbeat window is exceeded, the task should be marked FAILED."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="heartbeat_hard_marks_task_failed")
 
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=1.2)))
 
@@ -82,27 +89,31 @@ async def test_heartbeat_hard_marks_task_failed(env_and_imports, inmemory_db, co
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     # Wait for FAILED due to hard window
     t0 = time()
-    while time() - t0 < 4.0:
-        t = await inmemory_db.tasks.find_one({"id": task_id})
-        if t and str(t.get("status")) == str(cd.RunState.failed):
-            break
-        await asyncio.sleep(0.03)
-    else:
-        raise AssertionError("expected HARD heartbeat to mark task failed")
+    with log_context(task_id=task_id):
+        while time() - t0 < 4.0:
+            t = await inmemory_db.tasks.find_one({"id": task_id})
+            if t and str(t.get("status")) == str(cd.RunState.failed):
+                break
+            await asyncio.sleep(0.03)
+        else:
+            tlog.debug("assert.fail", event="assert.fail", reason="expected HARD heartbeat to mark task failed")
+            raise AssertionError("expected HARD heartbeat to mark task failed")
 
-    t = await inmemory_db.tasks.find_one({"id": task_id})
-    node = node_by_id(t, "s")
-    assert str(node.get("status")) != str(cd.RunState.finished)
+        t = await inmemory_db.tasks.find_one({"id": task_id})
+        node = node_by_id(t, "s")
+        assert str(node.get("status")) != str(cd.RunState.finished)
 
 
 @pytest.mark.cfg(coord={"heartbeat_soft_sec": 30, "heartbeat_hard_sec": 60}, worker={"hb_interval_sec": 100})
 @pytest.mark.asyncio
-async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports, inmemory_db, coord, worker_cfg):
+async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports, inmemory_db, coord, worker_cfg, tlog):
     """Restart with the same worker_id: coordinator should adopt inflight work without new epoch."""
     cd, wu = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="resume_inflight_worker_restarts_with_local_state")
 
     cfg_same = replace(worker_cfg, worker_id="w-resume")
 
@@ -122,6 +133,7 @@ async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports,
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     async def wait_running() -> int:
         t0 = time()
@@ -135,6 +147,7 @@ async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports,
         raise AssertionError("node did not reach running in time")
 
     epoch_before = await wait_running()
+    tlog.debug("phase", event="phase", phase="before_stop", attempt_epoch=epoch_before)
 
     await w1.stop()
 
@@ -151,14 +164,18 @@ async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports,
     t = await inmemory_db.tasks.find_one({"id": task_id})
     n = node_by_id(t, "s")
     epoch_after = int(n.get("attempt_epoch", 0))
+    tlog.debug("phase", event="phase", phase="after_restart", attempt_epoch=epoch_after)
     assert epoch_after == epoch_before, "coordinator should adopt inflight without starting a new attempt"
     await w2.stop()
 
 
 @pytest.mark.asyncio
-async def test_task_discover_complete_artifacts_skips_node_start(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_task_discover_complete_artifacts_skips_node_start(
+    env_and_imports, inmemory_db, coord, worker_factory, tlog
+):
     """If artifacts are 'complete' during discovery, node should auto-finish without starting its handler."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="task_discover_complete_artifacts_skips_node_start")
 
     await worker_factory(("noop", build_noop_query_only_role(db=inmemory_db, role="noop")))
 
@@ -170,6 +187,7 @@ async def test_task_discover_complete_artifacts_skips_node_start(env_and_imports
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     # Mark artifacts as 'complete' before scheduler picks it up
     await inmemory_db.artifacts.update_one(
@@ -180,6 +198,7 @@ async def test_task_discover_complete_artifacts_skips_node_start(env_and_imports
 
     t = await inmemory_db.tasks.find_one({"id": task_id})
     node = node_by_id(t, "x")
+    tlog.debug("discover.snapshot", event="discover.snapshot", node_status=str(node.get("status")))
     assert str(node.get("status")) == str(cd.RunState.finished), "node should finish without start"
 
 
@@ -187,9 +206,10 @@ async def test_task_discover_complete_artifacts_skips_node_start(env_and_imports
     coord={"discovery_window_sec": 1.0, "scheduler_tick_sec": 0.05, "heartbeat_soft_sec": 30, "heartbeat_hard_sec": 60}
 )
 @pytest.mark.asyncio
-async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """Grace window should delay start initially and allow it after the window elapses."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="grace_gate_blocks_then_allows_after_window")
 
     await worker_factory(("noop", build_noop_query_only_role(db=inmemory_db, role="noop")))
 
@@ -201,6 +221,7 @@ async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmem
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     # Shortly after creation the node should not be running due to grace-gate
     await asyncio.sleep(0.2)
@@ -211,13 +232,16 @@ async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmem
     # After the window, it should start (or even finish)
     t0 = time()
     started = False
-    while time() - t0 < 2.0:
-        t = await inmemory_db.tasks.find_one({"id": task_id})
-        node = node_by_id(t, "x")
-        if str(node.get("status")) in (str(cd.RunState.running), str(cd.RunState.finished)):
-            started = True
-            break
-        await asyncio.sleep(0.05)
+    with log_context(task_id=task_id):
+        while time() - t0 < 2.0:
+            t = await inmemory_db.tasks.find_one({"id": task_id})
+            node = node_by_id(t, "x")
+            st = str(node.get("status"))
+            if st in (str(cd.RunState.running), str(cd.RunState.finished)):
+                started = True
+                tlog.debug("grace.start", event="grace.start", status=st)
+                break
+            await asyncio.sleep(0.05)
     assert started, "expected coordinator to start after window"
 
 
@@ -231,9 +255,10 @@ async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmem
     }
 )
 @pytest.mark.asyncio
-async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """A DEFERRED retry must not be throttled by discovery grace window."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="deferred_retry_ignores_grace_gate")
 
     await worker_factory(("flaky", build_flaky_once_handler(db=inmemory_db)))
 
@@ -256,6 +281,7 @@ async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, c
     task_id = await coord.create_task(params={}, graph=graph)
 
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=6.0)
+    tlog.debug("task.finished", event="task.finished", status=str(tdoc.get("status")))
     assert str(tdoc.get("status")) == str(cd.RunState.finished)
     node = node_by_id(tdoc, "f")
     assert str(node.get("status")) == str(cd.RunState.finished)
@@ -263,9 +289,10 @@ async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, c
 
 @pytest.mark.cfg(coord={"heartbeat_soft_sec": 30, "heartbeat_hard_sec": 60})
 @pytest.mark.asyncio
-async def test_no_task_resumed_on_worker_restart(env_and_imports, inmemory_db, coord, worker_cfg):
+async def test_no_task_resumed_on_worker_restart(env_and_imports, inmemory_db, coord, worker_cfg, tlog):
     """On a cold worker restart there must be no TASK_RESUMED event emitted by the worker."""
     cd, wu = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="no_task_resumed_on_worker_restart")
 
     cfg = replace(worker_cfg, worker_id="w-nores")
 
@@ -311,15 +338,17 @@ async def test_no_task_resumed_on_worker_restart(env_and_imports, inmemory_db, c
         if (e.get("payload") or {}).get("kind") == "TASK_RESUMED":
             found = True
             break
+    tlog.debug("resume.scan", event="resume.scan.done", found=found)
     assert not found, "TASK_RESUMED must not be published on worker restart"
     await w2.stop()
 
 
 @pytest.mark.cfg(worker={"hb_interval_sec": 0.05}, coord={"heartbeat_soft_sec": 5, "heartbeat_hard_sec": 60})
 @pytest.mark.asyncio
-async def test_heartbeat_updates_lease_deadline_simple(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_heartbeat_updates_lease_deadline_simple(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """Heartbeats should move the lease.deadline_ts_ms forward while the node runs."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="heartbeat_updates_lease_deadline_simple")
 
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=0.8)))
 
@@ -347,6 +376,7 @@ async def test_heartbeat_updates_lease_deadline_simple(env_and_imports, inmemory
     await asyncio.sleep(1.1)
     t = await inmemory_db.tasks.find_one({"id": task_id})
     lease2 = node_by_id(t, "s").get("lease") or {}
+    tlog.debug("lease.compare", event="lease.compare", first=first, second=int(lease2.get("deadline_ts_ms", 0)))
     assert int(lease2.get("deadline_ts_ms", 0)) > int(first), "heartbeat must move lease forward"
 
 
@@ -361,19 +391,13 @@ async def test_heartbeat_updates_lease_deadline_simple(env_and_imports, inmemory
     },
     worker={"hb_interval_sec": 0.2, "lease_ttl_sec": 2},
 )
-async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_db, coord, worker_cfg):
+async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_db, coord, worker_cfg, tlog):
     """Restart with a new worker_id must bump attempt_epoch; stale heartbeats from the old epoch are ignored."""
     cd, wu = env_and_imports
-
-    # --- print coordinator config
-    try:
-        print("COORD.CFG:", getattr(coord, "cfg", None))
-    except Exception:
-        pass
+    tlog.debug("test.start", event="test.start", test_name="worker_restart_with_new_id_bumps_epoch")
 
     # First worker
     cfg1 = replace(worker_cfg, worker_id="w-epoch-1")
-    print("WORKER.CFG1:", cfg1)
     w1 = wu.Worker(
         db=inmemory_db,
         cfg=cfg1,
@@ -390,26 +414,27 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
         ),
     )
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", task_id=task_id)
 
     # Wait for running and capture epoch_before
-    t0 = time()
-    while True:
-        if time() - t0 > 3.0:
-            raise AssertionError("node did not reach running in time (first run)")
-        doc = await inmemory_db.tasks.find_one({"id": task_id})
-        if doc:
-            n = node_by_id(doc, "s")
-            if str(n.get("status")) == str(cd.RunState.running):
-                epoch_before = int(n.get("attempt_epoch", 0))
-                print(f"[PHASE1] running with epoch_before={epoch_before}")
-                break
-        await asyncio.sleep(0.03)
+    with log_context(task_id=task_id):
+        t0 = time()
+        while True:
+            if time() - t0 > 3.0:
+                raise AssertionError("node did not reach running in time (first run)")
+            doc = await inmemory_db.tasks.find_one({"id": task_id})
+            if doc:
+                n = node_by_id(doc, "s")
+                if str(n.get("status")) == str(cd.RunState.running):
+                    epoch_before = int(n.get("attempt_epoch", 0))
+                    tlog.debug("phase", event="phase", phase="first_running", attempt_epoch=epoch_before)
+                    break
+            await asyncio.sleep(0.03)
 
     await w1.stop()
 
     # Second worker with a different id
     cfg2 = replace(worker_cfg, worker_id="w-epoch-2")
-    print("WORKER.CFG2:", cfg2)
     w2 = wu.Worker(
         db=inmemory_db,
         cfg=cfg2,
@@ -423,7 +448,7 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
         {"id": task_id, "graph.nodes.node_id": "s"},
         {"$set": {"graph.nodes.$.status": cd.RunState.queued, "graph.nodes.$.last_event_recv_ms": 0}},
     )
-    print("[PHASE2] requeued node 's'")
+    tlog.debug("phase", event="phase", phase="requeued")
 
     # Poll for epoch bump and new lease owner; tolerate quick finish
     t1 = time()
@@ -431,23 +456,19 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
     lease_worker: str | None = None
     last_status: str | None = None
 
-    # For diagnostics
-    observations: list[tuple[float, str, int, str | None]] = []
-
     while True:
         if time() - t1 > 4.0:
-            # dump diagnostics
             cur_doc = await inmemory_db.tasks.find_one({"id": task_id})
             cur_node = node_by_id(cur_doc or {}, "s") if cur_doc else {}
-            print(
-                "[TIMEOUT] last node snapshot:",
-                {
-                    "status": str(cur_node.get("status")),
-                    "attempt_epoch": cur_node.get("attempt_epoch"),
-                    "lease": cur_node.get("lease"),
-                },
+            # diagnostics
+            tlog.debug(
+                "timeout.snapshot",
+                event="timeout.snapshot",
+                status=str(cur_node.get("status")),
+                attempt_epoch=cur_node.get("attempt_epoch"),
+                lease=cur_node.get("lease"),
             )
-            # dump worker events
+            # worker events dump
             evs = []
             cur = inmemory_db.worker_events.find({"task_id": task_id, "node_id": "s"})
             async for e in cur:
@@ -455,7 +476,7 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
                 evs.append(
                     {"kind": p.get("kind"), "worker_id": p.get("worker_id"), "attempt_epoch": e.get("attempt_epoch")}
                 )
-            print("[TIMEOUT] worker_events:", evs)
+            tlog.debug("timeout.worker_events", event="timeout.worker_events", events=evs)
             raise AssertionError("node did not restart with a new epoch in time")
 
         d2 = await inmemory_db.tasks.find_one({"id": task_id})
@@ -465,20 +486,22 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
             last_status = st
             epoch_after = int(n2.get("attempt_epoch", 0))
             lease_worker = (n2.get("lease") or {}).get("worker_id")
-            observations.append((time() - t1, st, epoch_after, lease_worker))
-            # live trace
-            print(
-                f"[TRACE] dt={observations[-1][0]:.3f}s status={st} epoch={epoch_after} lease.worker_id={lease_worker}"
+            tlog.debug(
+                "trace",
+                event="trace",
+                status=st,
+                attempt_epoch=epoch_after,
+                lease_worker=lease_worker,
             )
 
             # success condition while running
             if st == str(cd.RunState.running) and epoch_after == epoch_before + 1 and lease_worker == "w-epoch-2":
-                print("[SUCCESS] running with bumped epoch and new lease owner")
+                tlog.debug("success.running", event="success.running")
                 break
 
             # if finished quickly, we'll assert epoch bump and verify ACCEPTED from w-epoch-2 via worker_events
             if st == str(cd.RunState.finished) and epoch_after == epoch_before + 1:
-                print("[INFO] finished with bumped epoch; will verify ACCEPTED owner via worker_events")
+                tlog.debug("info.finished_fast", event="info.finished_fast")
                 break
 
         await asyncio.sleep(0.03)
@@ -486,8 +509,7 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
     assert epoch_after == epoch_before + 1, (epoch_before, epoch_after)
 
     if last_status == str(cd.RunState.running):
-        # already validated lease owner in-loop
-        pass
+        pass  # lease owner already validated above
     else:
         # Verify that new attempt was actually owned by w-epoch-2 at some point
         saw_accept_from_w2 = False
@@ -531,9 +553,10 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
 
 @pytest.mark.asyncio
 @pytest.mark.cfg(coord={"hb_monitor_tick_sec": 0.05, "heartbeat_soft_sec": 5, "heartbeat_hard_sec": 60})
-async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coord):
+async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coord, tlog):
     """Worker clock skew should not cause a hard timeout; lease deadlines must be non-decreasing."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="heartbeat_tolerates_clock_skew")
 
     # Single-node task; manually put node into running/epoch=1
     graph = prime_graph(
@@ -581,12 +604,16 @@ async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coor
     series = [base, base - 500, base + 1_500]  # jitter
     observed: list[int] = []
 
-    for dl in series:
-        await BROKER.produce(topic, _hb(dl).model_dump(mode="json"))
-        await asyncio.sleep(0.15)
-        tdoc = await inmemory_db.tasks.find_one({"id": task_id})
-        lease = node_by_id(tdoc, "x").get("lease") or {}
-        observed.append(int(lease.get("deadline_ts_ms", 0)))
+    with log_context(task_id=task_id):
+        for dl in series:
+            await BROKER.produce(topic, _hb(dl).model_dump(mode="json"))
+            await asyncio.sleep(0.15)
+            tdoc = await inmemory_db.tasks.find_one({"id": task_id})
+            lease = node_by_id(tdoc, "x").get("lease") or {}
+            observed.append(int(lease.get("deadline_ts_ms", 0)))
+            tlog.debug(
+                "hb.observe", event="hb.observe", injected_deadline=dl, effective=int(lease.get("deadline_ts_ms", 0))
+            )
 
     tdoc2 = await inmemory_db.tasks.find_one({"id": task_id})
     assert str(tdoc2.get("status")) != str(cd.RunState.failed)
@@ -595,9 +622,10 @@ async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coor
 
 @pytest.mark.asyncio
 @pytest.mark.cfg(coord={"cancel_grace_sec": 0.05, "finalizer_tick_sec": 0.05, "hb_monitor_tick_sec": 0.05})
-async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord):
+async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord, tlog):
     """Permanent fail upstream should cascade-cancel downstream nodes."""
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="lease_expiry_cascades_cancel")
 
     # up -> down
     graph = prime_graph(
@@ -654,4 +682,5 @@ async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord)
         await asyncio.sleep(0.05)
 
     doc2 = await inmemory_db.tasks.find_one({"id": task_id})
+    tlog.debug("cascade.snapshot", event="cascade.snapshot", status=str(node_by_id(doc2, "down").get("status")))
     assert str(node_by_id(doc2, "down").get("status")) == str(cd.RunState.cancelling)

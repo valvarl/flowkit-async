@@ -5,9 +5,10 @@ import time
 from collections.abc import Iterable
 from typing import Any, cast
 
+from flowkit.core.log import get_logger
 from flowkit.protocol.messages import RunState
 
-from .util import dbg
+LOG = get_logger("tests.helpers.graph")
 
 
 def prime_graph(cd, graph: dict[str, Any]) -> dict[str, Any]:
@@ -42,12 +43,17 @@ async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[st
             if t:
                 st = t.get("status")
                 nodes = {n["node_id"]: n.get("status") for n in (t.get("graph", {}).get("nodes") or [])}
-                dbg("WAIT.PROGRESS", task_status=st, nodes=nodes)
+                LOG.debug(
+                    "wait.progress",
+                    event="wait.progress",
+                    task_status=str(st),
+                    nodes={k: str(v) for k, v in nodes.items()},
+                )
             else:
-                dbg("WAIT.PROGRESS", info="task_not_found_yet")
+                LOG.debug("wait.progress", event="wait.progress", info="task_not_found_yet")
             last_log = now
         if t and (t.get("status") == RunState.finished or str(t.get("status", "")).endswith("finished")):
-            dbg("WAIT.DONE")
+            LOG.debug("wait.done", event="wait.done", task_id=task_id)
             return cast(dict[str, Any], t)
         await asyncio.sleep(0.03)
     raise AssertionError("task not finished in time")

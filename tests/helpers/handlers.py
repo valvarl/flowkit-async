@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from flowkit.core.log import get_logger
+from flowkit.core.utils import stable_hash
 from flowkit.worker.handlers.base import Batch, BatchResult, FinalizeResult, RoleHandler  # type: ignore
-from tests.helpers.util import dbg, stable_hash
+
+LOG = get_logger("tests.helpers.handlers")
+
 
 # ───────────────────────── Index-like (graph fan-in/out) ─────────────────────────
 
@@ -21,6 +25,10 @@ class IndexerHandler(RoleHandler):
 
     async def init(self, cfg):
         self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
+        LOG.debug(
+            "handler.init",
+            extra={"event": "handler.init", "role": self.role, "task_id": self._task_id, "epoch": self._epoch},
+        )
 
     async def load_input(self, ref, inline):
         return inline or {}
@@ -32,7 +40,16 @@ class IndexerHandler(RoleHandler):
         for idx in range(0, total, bs):
             chunk = skus[idx : idx + bs]
             uid = stable_hash({"node": "w1", "idx": idx // bs})
-            dbg("HNDL.indexer.yield", task_id=self._task_id, epoch=self._epoch, batch_uid=uid, count=len(chunk))
+            LOG.debug(
+                "handler.indexer.yield",
+                extra={
+                    "event": "handler.indexer.yield",
+                    "task_id": self._task_id,
+                    "epoch": self._epoch,
+                    "batch_uid": uid,
+                    "count": len(chunk),
+                },
+            )
             yield Batch(batch_uid=uid, payload={"skus": chunk})
 
     async def process_batch(self, batch, ctx):
@@ -88,15 +105,18 @@ class _PullFromArtifactsMixin:
                     for i in range(0, len(new_items), size):
                         chunk = new_items[i : i + size]
                         chunk_uid = stable_hash({"src": node_id, "parent": parent_uid, "idx": idx_local})
-                        dbg(
-                            "HNDL.emit",
-                            role=role_tag,
-                            task_id=self._task_id,
-                            epoch=self._epoch,
-                            src=node_id,
-                            parent_uid=parent_uid,
-                            batch_uid=chunk_uid,
-                            chunk=len(chunk),
+                        LOG.debug(
+                            "handler.emit",
+                            extra={
+                                "event": "handler.emit",
+                                "role": role_tag,
+                                "task_id": self._task_id,
+                                "epoch": self._epoch,
+                                "src": node_id,
+                                "parent_uid": parent_uid,
+                                "batch_uid": chunk_uid,
+                                "chunk": len(chunk),
+                            },
                         )
                         yield Batch(
                             batch_uid=chunk_uid,
@@ -128,6 +148,10 @@ class EnricherHandler(_PullFromArtifactsMixin, RoleHandler):
 
     async def init(self, cfg):
         self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
+        LOG.debug(
+            "handler.init",
+            extra={"event": "handler.init", "role": self.role, "task_id": self._task_id, "epoch": self._epoch},
+        )
 
     async def load_input(self, ref, inline):
         return {"input_inline": inline or {}}
@@ -164,6 +188,10 @@ class OCRHandler(_PullFromArtifactsMixin, RoleHandler):
 
     async def init(self, cfg):
         self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
+        LOG.debug(
+            "handler.init",
+            extra={"event": "handler.init", "role": self.role, "task_id": self._task_id, "epoch": self._epoch},
+        )
 
     async def load_input(self, ref, inline):
         return {"input_inline": inline or {}}
@@ -200,6 +228,10 @@ class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
 
     async def init(self, cfg):
         self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
+        LOG.debug(
+            "handler.init",
+            extra={"event": "handler.init", "role": self.role, "task_id": self._task_id, "epoch": self._epoch},
+        )
 
     async def load_input(self, ref, inline):
         # Keep inline so worker can still use input adapters if necessary.
@@ -275,7 +307,7 @@ class _CancelableSource(_BaseSource):
                 return BatchResult(success=False, permanent=False, reason_code="cancelled")
             await asyncio.sleep(min(step, remain))
             remain -= step
-        return await super().process_batch(batch, ctx)
+        return super().process_batch(batch, ctx)
 
 
 class _FlakyOnce(RoleHandler):

@@ -15,13 +15,9 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from tests.helpers import BROKER, dbg
-from tests.helpers.graph import (
-    node_by_id,
-    prime_graph,
-    wait_node_running,
-    wait_task_finished,
-)
+from flowkit.core.log import log_context
+from tests.helpers import BROKER
+from tests.helpers.graph import node_by_id, prime_graph, wait_node_running, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Only the roles required by this module
@@ -32,19 +28,22 @@ pytestmark = pytest.mark.worker_types("indexer,analyzer")
 
 
 @pytest_asyncio.fixture
-async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory):
+async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory, tlog):
     """
     Minimal worker set for fan-in scenarios:
       - one 'indexer' worker (processes all upstream indexer nodes sequentially)
       - one 'analyzer' worker (downstream consumer)
     Handlers come from conftest.handlers (already DB-injected).
     """
+    tlog.debug("fixture.start", event="fixture.start", fixture="workers_indexer_analyzer")
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
+    tlog.debug("fixture.ready", event="fixture.ready", fixture="workers_indexer_analyzer")
     # worker_factory will auto-stop workers on teardown
     yield
+    tlog.debug("fixture.teardown", event="fixture.teardown", fixture="workers_indexer_analyzer")
 
 
 # ───────────────────────── Helpers (local builders only) ─────────────────────────
@@ -67,13 +66,14 @@ def _make_indexer_node(node_id: str, total: int, batch: int):
 
 
 @pytest.mark.asyncio
-async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
     Fan-in ANY: downstream should start as soon as at least one parent streams
     (start_when='first_batch'), even if other parents are not yet finished.
     We run a single 'indexer' worker so upstream parents execute sequentially.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="fanin_any_starts_early")
 
     u1 = _make_indexer_node("u1", total=4, batch=4)
     u2 = _make_indexer_node("u2", total=8, batch=4)
@@ -103,32 +103,34 @@ async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, worke
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.ANY.TASK_CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="fanin_any_starts_early", task_id=task_id)
 
-    # Snapshot when d_any entered running.
-    doc_at_start = await wait_node_running(inmemory_db, task_id, "d_any", timeout=8.0)
-    s1 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u1")["status"]
-    s2 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u2")["status"]
-    s3 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u3")["status"]
-    dbg("ANY.START_OBSERVED", u1=s1, u2=s2, u3=s3)
+    with log_context(task_id=task_id):
+        # Snapshot when d_any entered running.
+        doc_at_start = await wait_node_running(inmemory_db, task_id, "d_any", timeout=8.0)
+        s1 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u1")["status"])
+        s2 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u2")["status"])
+        s3 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "u3")["status"])
+        tlog.debug("fanin.any.start_observed", event="fanin.any.start_observed", u1=s1, u2=s2, u3=s3)
 
-    # Not all parents should be finished at that moment.
-    finished_flags = [str(s).endswith("finished") for s in (s1, s2, s3)]
-    assert sum(1 for x in finished_flags if x) < 3, "ANY should not wait for all parents"
+        # Not all parents should be finished at that moment.
+        finished_flags = [x.endswith("finished") for x in (s1, s2, s3)]
+        assert sum(1 for x in finished_flags if x) < 3, "ANY should not wait for all parents"
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("ANY.FINAL.STATUS", statuses=st)
-    assert st["d_any"] == cd.RunState.finished
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        st = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("fanin.any.final.status", event="fanin.any.final.status", statuses=st)
+        assert st["d_any"] == str(cd.RunState.finished)
 
 
 @pytest.mark.asyncio
-async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
     Fan-in ALL: without start_when hint, downstream should only start after
     both parents are finished.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="fanin_all_waits_all_parents")
 
     a = _make_indexer_node("a", total=6, batch=3)
     b = _make_indexer_node("b", total=10, batch=5)
@@ -152,30 +154,32 @@ async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, 
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.ALL.TASK_CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="fanin_all_waits_all_parents", task_id=task_id)
 
-    doc_at_start = await wait_node_running(inmemory_db, task_id, "d_all", timeout=8.0)
-    sa = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "a")["status"]
-    sb = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "b")["status"]
-    dbg("ALL.START_OBSERVED", a=sa, b=sb)
+    with log_context(task_id=task_id):
+        doc_at_start = await wait_node_running(inmemory_db, task_id, "d_all", timeout=8.0)
+        sa = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "a")["status"])
+        sb = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "b")["status"])
+        tlog.debug("fanin.all.start_observed", event="fanin.all.start_observed", a=sa, b=sb)
 
-    # By the time d_all starts, both parents must have finished.
-    assert str(sa).endswith("finished") and str(sb).endswith("finished")
+        # By the time d_all starts, both parents must have finished.
+        assert sa.endswith("finished") and sb.endswith("finished")
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("ALL.FINAL.STATUS", statuses=st)
-    assert st["d_all"] == cd.RunState.finished
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        st = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("fanin.all.final.status", event="fanin.all.final.status", statuses=st)
+        assert st["d_all"] == str(cd.RunState.finished)
 
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(reason="Fan-in 'count:n' is not implemented yet", strict=False)
-async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
     Fan-in COUNT:N placeholder: downstream should start when at least N parents are ready.
     Marked xfail until coordinator supports 'count:n'.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="fanin_count_n")
 
     p1 = _make_indexer_node("p1", total=4, batch=4)
     p2 = _make_indexer_node("p2", total=6, batch=3)
@@ -205,27 +209,31 @@ async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexe
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.COUNTN.TASK_CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="fanin_count_n", task_id=task_id)
 
-    doc_at_start = await wait_node_running(inmemory_db, task_id, "d_cnt", timeout=8.0)
-    s1 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p1")["status"]
-    s2 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p2")["status"]
-    s3 = next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p3")["status"]
-    ready = [str(s).endswith("finished") for s in (s1, s2, s3)]
-    assert sum(1 for x in ready if x) >= 2
+    with log_context(task_id=task_id):
+        doc_at_start = await wait_node_running(inmemory_db, task_id, "d_cnt", timeout=8.0)
+        s1 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p1")["status"])
+        s2 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p2")["status"])
+        s3 = str(next(n for n in doc_at_start["graph"]["nodes"] if n["node_id"] == "p3")["status"])
+        ready = [x.endswith("finished") for x in (s1, s2, s3)]
+        assert sum(1 for x in ready if x) >= 2
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    assert next(n for n in tdoc["graph"]["nodes"] if n["node_id"] == "d_cnt")["status"] == cd.RunState.finished
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        assert str(next(n for n in tdoc["graph"]["nodes"] if n["node_id"] == "d_cnt")["status"]) == str(
+            cd.RunState.finished
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(reason="Edges vs routing priority not implemented/covered yet", strict=False)
-async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
     If explicit graph edges are present and a node also has routing.on_success,
     edges should take precedence (routing target should not run).
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="edges_vs_routing_priority")
 
     src = _make_indexer_node("src", total=3, batch=3)
 
@@ -268,26 +276,28 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.EDGES_ROUTES.TASK_CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="edges_vs_routing_priority", task_id=task_id)
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("EDGES_ROUTES.FINAL.STATUS", statuses=st)
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        st = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("edges_routes.final.status", event="edges_routes.final.status", statuses=st)
 
-    assert st["only_edges"] == cd.RunState.finished
-    assert st["should_not_run"] in (
-        None,
-        cd.RunState.queued,
-    ), "routing.on_success must not trigger when explicit edges exist"
+        assert st["only_edges"] == str(cd.RunState.finished)
+        assert st["should_not_run"] in (
+            None,
+            str(cd.RunState.queued),
+        ), "routing.on_success must not trigger when explicit edges exist"
 
 
 @pytest.mark.asyncio
-async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db, coord, workers_indexer_analyzer):
+async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
     coordinator_fn node should run without a worker and produce artifacts that
     a downstream analyzer can consume via pull.from_artifacts.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="coordinator_fn_merge_without_worker")
 
     u1 = _make_indexer_node("u1", total=5, batch=5)
     u2 = _make_indexer_node("u2", total=7, batch=7)
@@ -326,29 +336,33 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.MERGE.TASK_CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="coordinator_fn_merge_without_worker", task_id=task_id)
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("MERGE.FINAL.STATUS", statuses=st)
-    assert st["merge"] == cd.RunState.finished
-    assert st["sink"] == cd.RunState.finished
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        st = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("merge.final.status", event="merge.final.status", statuses=st)
+        assert st["merge"] == str(cd.RunState.finished)
+        assert st["sink"] == str(cd.RunState.finished)
 
-    # Merge artifacts must exist and be complete.
-    cnt = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "merge", "status": "complete"})
-    dbg("MERGE.ART.COUNT", count=cnt)
-    assert cnt >= 1
+        # Merge artifacts must exist and be complete.
+        cnt = await inmemory_db.artifacts.count_documents(
+            {"task_id": task_id, "node_id": "merge", "status": "complete"}
+        )
+        tlog.debug("merge.artifacts.count", event="merge.artifacts.count", count=int(cnt))
+        assert cnt >= 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(reason="routing.on_failure is not implemented yet", strict=False)
 async def test_routing_on_failure_triggers_remediator_only(
-    env_and_imports, inmemory_db, coord, workers_indexer_analyzer
+    env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog
 ):
     """
     On upstream TASK_FAILED(permanent=True), only the 'on_failure' remediator should run; 'on_success' must not.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="routing_on_failure_triggers_remediator_only")
 
     # Upstream that we will fail manually via a forged status event.
     u = _make_indexer_node("u", total=5, batch=5)
@@ -415,7 +429,7 @@ async def test_routing_on_failure_triggers_remediator_only(
 
 @pytest.mark.asyncio
 async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
-    env_and_imports, inmemory_db, coord, workers_indexer_analyzer, monkeypatch
+    env_and_imports, inmemory_db, coord, workers_indexer_analyzer, monkeypatch, tlog
 ):
     """
     One upstream → two downstreams: A has start_when=first_batch (starts early),
@@ -423,6 +437,7 @@ async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
     """
     cd, _ = env_and_imports
     monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.12")
+    tlog.debug("test.start", event="test.start", test_name="test_fanout_one_upstream_two_downstreams_mixed_start_when")
 
     u = _make_indexer_node("u", total=12, batch=4)  # 3 batches
     a_fast = {
@@ -474,7 +489,7 @@ async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
     # Eventually both must finish.
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
     final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("FANOUT.MIXED.FINAL", statuses=final)
+    tlog.debug("fanout.mixed.final", event="fanout.mixed.final", statuses=final)
     assert final["u"] == cd.RunState.finished
     assert final["a_fast"] == cd.RunState.finished
     assert final["b_wait"] == cd.RunState.finished

@@ -1,4 +1,3 @@
-# tests/helpers/kafka.py
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +5,10 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from .util import dbg
+from flowkit.core.log import get_logger, log_context
+
+LOG = get_logger("tests.kafka")
+
 
 # ───────────────────────── Chaos config ─────────────────────────
 
@@ -97,7 +99,7 @@ class InMemKafkaBroker:
     def set_chaos(self, cfg: ChaosConfig | None) -> None:
         """Enable or disable chaos. Pass None to disable."""
         self._chaos = _Chaos(cfg) if cfg is not None else None
-        dbg("KAFKA.CHAOS", enabled=bool(self._chaos))
+        LOG.debug("kafka.chaos", event="kafka.chaos", enabled=bool(self._chaos))
 
     @property
     def chaos(self) -> _Chaos | None:
@@ -108,7 +110,7 @@ class InMemKafkaBroker:
         """Clear all topic queues (chaos mode is preserved)."""
         self.topics.clear()
         self.rev.clear()
-        dbg("KAFKA.RESET")
+        LOG.debug("kafka.reset", event="kafka.reset")
 
     def ensure_queue(self, topic: str, group_id: str) -> asyncio.Queue:
         tg = self.topics.setdefault(topic, {})
@@ -117,7 +119,12 @@ class InMemKafkaBroker:
             q = asyncio.Queue()
             tg[group_id] = q
             self.rev[id(q)] = topic
-            dbg("KAFKA.GROUP_BIND", topic=topic, group_id=group_id)
+            LOG.debug(
+                "kafka.group_bind",
+                event="kafka.group_bind",
+                topic=topic,
+                group_id=group_id,
+            )
         return q
 
     def topic_of(self, q: asyncio.Queue) -> str:
@@ -126,26 +133,25 @@ class InMemKafkaBroker:
     async def produce(self, topic: str, value: Any) -> None:
         payload = value or {}
         msg_type = payload.get("msg_type")
-        kind = (payload.get("payload") or {}).get("kind") or (payload.get("payload") or {}).get("reply")
+        pay = payload.get("payload") or {}
+        kind = pay.get("kind") or pay.get("reply")
 
         # chaos: broker-side jitter / drop / duplication
         if self._chaos is not None:
             await self._chaos.broker_jitter()
             if self._chaos.should_drop(topic):
-                dbg("KAFKA.DROP", topic=topic, msg_type=msg_type, kind=kind)
+                LOG.debug("kafka.drop", event="kafka.drop", topic=topic, msg_type=msg_type, kind=kind)
                 return
             duplicate = self._chaos.should_duplicate(topic)
         else:
             duplicate = False
-
-        # dbg("KAFKA.PRODUCE", topic=topic, msg_type=msg_type, kind=kind)
 
         deliveries = 2 if duplicate else 1
         for i in range(deliveries):
             for q in self.topics.setdefault(topic, {}).values():
                 await q.put(_Rec(value, topic))
             if duplicate and i == 0:
-                dbg("KAFKA.DUP", topic=topic)
+                LOG.debug("kafka.dup", event="kafka.dup", topic=topic)
 
 
 # single broker instance
@@ -171,10 +177,10 @@ class AIOKafkaProducerMock:
         pass
 
     async def start(self) -> None:
-        dbg("PRODUCER.START")
+        LOG.debug("producer.start", event="producer.start")
 
     async def stop(self) -> None:
-        dbg("PRODUCER.STOP")
+        LOG.debug("producer.stop", event="producer.stop")
 
     async def send_and_wait(self, topic: str, value: Any, key: bytes | None = None) -> None:
         await BROKER.produce(topic, value)
@@ -198,10 +204,10 @@ class AIOKafkaConsumerMock:
 
     async def start(self) -> None:
         self._queues = [BROKER.ensure_queue(t, self._group) for t in self._topics]
-        dbg("CONSUMER.START", group_id=self._group, topics=self._topics)
+        LOG.debug("consumer.start", event="consumer.start", group_id=self._group, topics=self._topics)
 
     async def stop(self) -> None:
-        dbg("CONSUMER.STOP", group_id=self._group)
+        LOG.debug("consumer.stop", event="consumer.stop", group_id=self._group)
         for t in self._topics:
             tg = BROKER.topics.get(t)
             if tg:
@@ -218,8 +224,11 @@ class AIOKafkaConsumerMock:
                     rec = q.get_nowait()
                     val = rec.value or {}
                     msg_type = val.get("msg_type")
-                    kind = (val.get("payload") or {}).get("kind") or (val.get("payload") or {}).get("reply")
-                    dbg("CONSUMER.GET", group_id=self._group, topic=BROKER.topic_of(q), msg_type=msg_type, kind=kind)
+                    pay = val.get("payload") or {}
+                    kind = pay.get("kind") or pay.get("reply")
+
+                    with log_context(group_id=self._group, topic=BROKER.topic_of(q)):
+                        LOG.debug("consumer.get", event="consumer.get", msg_type=msg_type, kind=kind)
 
                     # chaos: consumer-side jitter
                     if BROKER.chaos is not None:
@@ -231,15 +240,15 @@ class AIOKafkaConsumerMock:
             await asyncio.sleep(0.003)
 
     async def commit(self) -> None:
-        pass
+        return
 
     def pause(self, *parts) -> None:
         self._paused = True
-        dbg("CONSUMER.PAUSE", group_id=self._group)
+        LOG.debug("consumer.pause", event="consumer.pause", group_id=self._group)
 
     def resume(self, *parts) -> None:
         self._paused = False
-        dbg("CONSUMER.RESUME", group_id=self._group)
+        LOG.debug("consumer.resume", event="consumer.resume", group_id=self._group)
 
     def assignment(self):
         return {("t", 0)}
