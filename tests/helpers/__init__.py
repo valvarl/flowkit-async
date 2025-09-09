@@ -9,7 +9,6 @@ from .topics import (
     status_topic,
     worker_announce_topic,
 )
-from .util import dbg, stable_hash
 
 __all__ = [
     "BROKER",

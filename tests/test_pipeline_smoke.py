@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from tests.helpers import dbg
+from flowkit.core.log import log_context
 from tests.helpers.graph import prime_graph, wait_task_finished
 from tests.helpers.handlers import (
     build_analyzer_handler,
@@ -35,20 +35,20 @@ pytestmark = pytest.mark.worker_types("indexer,enricher,ocr,analyzer")
 
 
 @pytest_asyncio.fixture
-async def workers_pipeline(env_and_imports, inmemory_db, worker_factory):
+async def workers_pipeline(env_and_imports, inmemory_db, worker_factory, tlog):
     """
     Start four workers for roles: indexer, enricher, ocr, analyzer.
     Handlers come from tests.helpers.handlers and already receive `db`.
     """
     _, wu = env_and_imports
+    tlog.debug("test.workers.spawn", event="test.workers.spawn", roles=["indexer", "enricher", "ocr", "analyzer"])
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
         ("enricher", build_enricher_handler(db=inmemory_db)),
         ("ocr", build_ocr_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
-    # Nothing to yield; worker_factory auto-stops on teardown
-    yield
+    yield  # worker_factory auto-stops on teardown
 
 
 # ───────────────────────── Helpers ─────────────────────────
@@ -133,27 +133,39 @@ def build_graph(*, total_skus=12, batch_size=5, mini_batch=2) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_e2e_streaming_with_kafka_sim(env_and_imports, inmemory_db, coord, workers_pipeline):
+async def test_e2e_streaming_with_kafka_sim(env_and_imports, inmemory_db, coord, workers_pipeline, tlog):
     """
     Full pipeline should complete and produce artifacts at indexer/enricher/ocr stages.
     """
     cd, _ = env_and_imports
 
-    graph = prime_graph(cd, build_graph(total_skus=12, batch_size=5, mini_batch=3))
+    graph = build_graph(total_skus=12, batch_size=5, mini_batch=3)
+    tlog.debug("test.graph.built", event="test.graph.built", nodes=len(graph["nodes"]))
+
+    graph = prime_graph(cd, graph)
+    tlog.debug("test.graph.primed", event="test.graph.primed")
+
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("TEST.TASK_CREATED", task_id=task_id)
+    tlog.debug("test.task.created", event="test.task.created", task_id=task_id)
 
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+    # добавим task_id в контекст, чтобы все последующие логи теста были «связаны»
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
+        tlog.debug("test.final.statuses", event="test.final.statuses", statuses=st)
 
-    st = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("TEST.FINAL.STATUSES", statuses=st)
-    assert st["w1"] == cd.RunState.finished
-    assert st["w2"] == cd.RunState.finished
-    assert st["w3"] == cd.RunState.finished
-    assert st["w5"] == cd.RunState.finished
-    assert st["w4"] == cd.RunState.finished
+        assert st["w1"] == cd.RunState.finished
+        assert st["w2"] == cd.RunState.finished
+        assert st["w3"] == cd.RunState.finished
+        assert st["w5"] == cd.RunState.finished
+        assert st["w4"] == cd.RunState.finished
 
-    # Partial/complete artifacts must exist for w1, w2, w5 (batch_uid-based).
-    assert await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w1"}) > 0
-    assert await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w2"}) > 0
-    assert await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w5"}) > 0
+        # Partial/complete artifacts must exist for w1, w2, w5 (batch_uid-based).
+        a_w1 = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w1"})
+        a_w2 = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w2"})
+        a_w5 = await inmemory_db.artifacts.count_documents({"task_id": task_id, "node_id": "w5"})
+        tlog.debug("test.artifacts.counts", event="test.artifacts.counts", w1=a_w1, w2=a_w2, w5=a_w5)
+
+        assert a_w1 > 0
+        assert a_w2 > 0
+        assert a_w5 > 0

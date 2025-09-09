@@ -1,3 +1,4 @@
+# tests/test_streaming_fanin_metrics.py
 """
 Tests for streaming/async fan-in behavior and metric accounting.
 
@@ -19,7 +20,8 @@ from typing import Any
 
 import pytest
 
-from tests.helpers import BROKER, AIOKafkaProducerMock, dbg
+from flowkit.core.log import log_context
+from tests.helpers import BROKER, AIOKafkaProducerMock
 from tests.helpers.graph import (
     make_graph,
     node_by_id,
@@ -71,15 +73,15 @@ def _get_count(doc: dict[str, Any], node_id: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     Downstream should start while upstream is still running when `start_when=first_batch` is set.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="start_when_first_batch_starts_early")
 
     # Start workers via factory (separate handler instances, shared role topics).
-    spawn = worker_factory
-    await spawn(
+    await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
         ("analyzer", build_analyzer_handler(db=inmemory_db)),
     )
@@ -105,31 +107,40 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("T.FIRSTBATCH.CREATED", task_id=task_id)
+    tlog.debug("task.created", event="task.created", test_name="start_when_first_batch_starts_early", task_id=task_id)
 
-    doc_when_d_runs = await wait_node_running(inmemory_db, task_id, "d", timeout=6.0)
-    st_u = _node_status(doc_when_d_runs, "u")
-    dbg("FIRSTBATCH.START_OBSERVED", u=st_u, d="running")
+    with log_context(task_id=task_id):
+        doc_when_d_runs = await wait_node_running(inmemory_db, task_id, "d", timeout=6.0)
+        st_u = _node_status(doc_when_d_runs, "u")
+        tlog.debug(
+            "firstbatch.start_observed",
+            event="firstbatch.start_observed",
+            upstream=str(st_u),
+            downstream="running",
+        )
 
-    # Upstream must not yet be finished; otherwise early start is not verified.
-    assert not str(st_u).endswith("finished"), "Upstream already finished, early start not verified"
+        # Upstream must not yet be finished; otherwise early start is not verified.
+        assert not str(st_u).endswith("finished"), "Upstream already finished, early start not verified"
 
-    # Eventually everything must finish.
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("FIRSTBATCH.FINAL", statuses=final)
-    assert final["u"] == cd.RunState.finished
-    assert final["d"] == cd.RunState.finished
+        # Eventually everything must finish.
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        final = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("firstbatch.final", event="firstbatch.final", statuses=final)
+        assert node_by_id(tdoc, "u")["status"] == cd.RunState.finished
+        assert node_by_id(tdoc, "d")["status"] == cd.RunState.finished
 
 
 @pytest.mark.asyncio
-async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
+async def test_after_upstream_complete_delays_start(
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
+):
     """
     Without start_when, the downstream must not start until the upstream is fully finished.
     We first assert a negative hold window while the upstream is running, then assert the
     downstream starts and finishes after the upstream completes.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="after_upstream_complete_delays_start")
 
     # Slow down indexer batch processing: 2 batches x ~0.45s ~= 0.9s total
     monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.45")
@@ -148,7 +159,6 @@ async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db
         "depends_on": ["u"],
         "fan_in": "all",  # wait for u to fully complete
         "io": {
-            # Adapter is not essential for the assertion, but we keep a realistic artifacts-pull path.
             "input_inline": {
                 "input_adapter": "pull.from_artifacts",
                 "input_args": {"from_nodes": ["u"], "poll_ms": 30},
@@ -160,24 +170,28 @@ async def test_after_upstream_complete_delays_start(env_and_imports, inmemory_db
 
     graph = prime_graph(cd, make_graph(nodes=[u, d], edges=[("u", "d")]))
     task_id = await coord.create_task(params={}, graph=graph)
+    tlog.debug("task.created", event="task.created", test_name="after_upstream_complete_delays_start", task_id=task_id)
 
-    # 1) While u is still running (~0.9s), d must NOT enter running (hold < u duration).
-    await wait_node_not_running_for(inmemory_db, task_id, "d", hold=0.5)
+    with log_context(task_id=task_id):
+        # 1) While u is still running (~0.9s), d must NOT enter running (hold < u duration).
+        await wait_node_not_running_for(inmemory_db, task_id, "d", hold=0.5)
 
-    # 2) Wait until u finished.
-    await wait_node_finished(inmemory_db, task_id, "u", timeout=3.0)
+        # 2) Wait until u finished.
+        await wait_node_finished(inmemory_db, task_id, "u", timeout=3.0)
 
-    # 3) Now d should start and quickly finish.
-    await wait_node_finished(inmemory_db, task_id, "d", timeout=2.0)
+        # 3) Now d should start and quickly finish.
+        await wait_node_finished(inmemory_db, task_id, "d", timeout=2.0)
+        tlog.debug("delayed.start.ok", event="delayed.start.ok")
 
 
 @pytest.mark.asyncio
-async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     Multi-stream fan-in: three upstream indexers stream into one analyzer.
     Analyzer should start early on first batch and eventually see the full flow.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="multistream_fanin_stream_to_one_downstream")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -211,36 +225,43 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    dbg("T.MULTISTREAM.CREATED", task_id=task_id)
+    tlog.debug(
+        "task.created", event="task.created", test_name="multistream_fanin_stream_to_one_downstream", task_id=task_id
+    )
 
-    doc_when_d_runs = await wait_node_running(inmemory_db, task_id, "d", timeout=8.0)
-    st_u = {nid: _node_status(doc_when_d_runs, nid) for nid in ("u1", "u2", "u3")}
-    dbg("MULTISTREAM.START_OBSERVED", u1=st_u["u1"], u2=st_u["u2"], u3=st_u["u3"], d="running")
+    with log_context(task_id=task_id):
+        doc_when_d_runs = await wait_node_running(inmemory_db, task_id, "d", timeout=8.0)
+        st_u = {nid: str(_node_status(doc_when_d_runs, nid)) for nid in ("u1", "u2", "u3")}
+        tlog.debug(
+            "multistream.start_observed", event="multistream.start_observed", upstream=st_u, downstream="running"
+        )
 
-    # Not all upstreams should be finished at the analyzer start moment.
-    assert sum(1 for s in st_u.values() if str(s).endswith("finished")) < 3
+        # Not all upstreams should be finished at the analyzer start moment.
+        assert sum(1 for s in st_u.values() if s.endswith("finished")) < 3
 
-    # Final state must be finished for all nodes.
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
-    final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
-    dbg("MULTISTREAM.FINAL", statuses=final)
-    assert final["d"] == cd.RunState.finished
-    assert final["u1"] == cd.RunState.finished
-    assert final["u2"] == cd.RunState.finished
-    assert final["u3"] == cd.RunState.finished
+        # Final state must be finished for all nodes.
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
+        final = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
+        tlog.debug("multistream.final", event="multistream.final", statuses=final)
 
-    # Analyzer aggregated count should be at least the total items across sources.
-    got = _get_count(tdoc, "d")
-    dbg("MULTISTREAM.D.COUNT", count=got)
-    assert got >= (9 + 8 + 12)
+        assert node_by_id(tdoc, "d")["status"] == cd.RunState.finished
+        assert node_by_id(tdoc, "u1")["status"] == cd.RunState.finished
+        assert node_by_id(tdoc, "u2")["status"] == cd.RunState.finished
+        assert node_by_id(tdoc, "u3")["status"] == cd.RunState.finished
+
+        # Analyzer aggregated count should be at least the total items across sources.
+        got = _get_count(tdoc, "d")
+        tlog.debug("multistream.count", event="multistream.count", count=got)
+        assert got >= (9 + 8 + 12)
 
 
 @pytest.mark.asyncio
-async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     Single upstream -> single downstream: analyzer's aggregated 'count' must equal the total items.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_single_stream_exact_count")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -271,16 +292,17 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
 
     got = _get_count(tdoc, "d")
-    dbg("METRICS.SINGLE", expect=total, got=got)
+    tlog.debug("metrics.single", event="metrics.single", expect=total, got=got)
     assert got == total
 
 
 @pytest.mark.asyncio
-async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     Three upstreams -> one downstream: analyzer's aggregated 'count' must equal the sum of all totals.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_multistream_exact_sum")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -317,16 +339,17 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
 
     expect = sum(totals.values())
     got = _get_count(tdoc, "d")
-    dbg("METRICS.MULTI", expect=expect, got=got)
+    tlog.debug("metrics.multi", event="metrics.multi", expect=expect, got=got)
     assert got == expect
 
 
 @pytest.mark.asyncio
-async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     With a remainder in the last upstream batch, analyzer's 'count' must still exactly equal total.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_partial_batches_exact_count")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -357,16 +380,17 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
 
     got = _get_count(tdoc, "d")
-    dbg("METRICS.PARTIAL", expect=total, got=got)
+    tlog.debug("metrics.partial", event="metrics.partial", expect=total, got=got)
     assert got == total
 
 
 @pytest.mark.asyncio
-async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coord, worker_factory):
+async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     Two back-to-back tasks must keep metric aggregation isolated per task document.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_isolation_between_tasks")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -393,20 +417,21 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
         g = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
         g = prime_graph(cd, g)
         tid = await coord.create_task(params={}, graph=g)
-        tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
-        return tid, _get_count(tdoc, "d")
+        with log_context(task_id=tid):
+            tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
+            return tid, _get_count(tdoc, "d")
 
     tid1, c1 = await run_once(7, 3)
     tid2, c2 = await run_once(11, 4)
 
-    dbg("METRICS.ISOLATION", task1=tid1, count1=c1, task2=tid2, count2=c2)
+    tlog.debug("metrics.isolation", event="metrics.isolation", task1=tid1, count1=c1, task2=tid2, count2=c2)
     assert c1 == 7
     assert c2 == 11
 
 
 @pytest.mark.asyncio
 async def test_metrics_idempotent_on_duplicate_status_events(
-    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
 ):
     """
     Duplicate STATUS events (BATCH_OK / TASK_DONE) must not double-increment aggregated metrics.
@@ -415,6 +440,7 @@ async def test_metrics_idempotent_on_duplicate_status_events(
     for status topics. The Coordinator should deduplicate by envelope key and keep metrics stable.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_idempotent_on_duplicate_status_events")
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
@@ -457,22 +483,23 @@ async def test_metrics_idempotent_on_duplicate_status_events(
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-
-    got = _get_count(tdoc, "d")
-    dbg("METRICS.DEDUP", expect=total, got=got)
-    assert got == total
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        got = _get_count(tdoc, "d")
+        tlog.debug("metrics.dedup", event="metrics.dedup", expect=total, got=got)
+        assert got == total
 
 
 @pytest.mark.asyncio
 async def test_status_out_of_order_does_not_break_aggregation(
-    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
 ):
     """
     BATCH_OK STATUS events arrive out of order → the aggregated metric remains correct.
     We hold the first BATCH_OK so later ones arrive first.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="status_out_of_order_does_not_break_aggregation")
 
     # Slightly slow batches so TASK_DONE arrives after the delayed BATCH_OK.
     monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.2")
@@ -500,9 +527,7 @@ async def test_status_out_of_order_does_not_break_aggregation(
                 await asyncio.sleep(0.15)
                 await BROKER.produce(topic, value)
 
-            # Keep a reference to satisfy RUF006 and prevent GC of the task.
             state["delayed_task"] = asyncio.create_task(later())
-            # Optional: clean up the reference when done
             state["delayed_task"].add_done_callback(lambda _t: state.pop("delayed_task", None))
             return  # suppress original send; delayed one will be re-injected via BROKER
 
@@ -531,22 +556,24 @@ async def test_status_out_of_order_does_not_break_aggregation(
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
-    got = _get_count(tdoc, "d")
-    dbg("METRICS.OOO", expect=total, got=got)
-    assert got == total
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
+        got = _get_count(tdoc, "d")
+        tlog.debug("metrics.ooo", event="metrics.ooo", expect=total, got=got)
+        assert got == total
 
 
 @pytest.mark.asyncio
 async def test_metrics_dedup_persists_across_coord_restart(
-    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch
+    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
 ):
     """
     Metric deduplication survives a coordinator restart: duplicates of STATUS
     (BATCH_OK/TASK_DONE) sent during the restart must not double-count.
-    Skips if the fixture `coord` has no `restart` method.
+    Skips if the fixture `coord` has no `restart` method`.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_dedup_persists_across_coord_restart")
 
     restart_fn = getattr(coord, "restart", None)
     if restart_fn is None:
@@ -606,19 +633,21 @@ async def test_metrics_dedup_persists_across_coord_restart(
     graph = prime_graph(cd, graph)
 
     task_id = await coord.create_task(params={}, graph=graph)
-    tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
-    got = _get_count(tdoc, "d")
-    dbg("METRICS.DEDUP.RESTART", expect=total, got=got)
-    assert got == total
+    with log_context(task_id=task_id):
+        tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
+        got = _get_count(tdoc, "d")
+        tlog.debug("metrics.dedup.restart", event="metrics.dedup.restart", expect=total, got=got)
+        assert got == total
 
 
 @pytest.mark.asyncio
-async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch):
+async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog):
     """
     Two concurrent tasks (same node_ids across different task_ids) do not interfere:
     final 'count' values are isolated per task.
     """
     cd, _ = env_and_imports
+    tlog.debug("test.start", event="test.start", test_name="metrics_cross_talk_guard")
 
     # Slow down slightly to force overlap in execution.
     monkeypatch.setenv("TEST_IDX_PROCESS_SLEEP_SEC", "0.1")
@@ -655,11 +684,13 @@ async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, wor
     t1 = await coord.create_task(params={}, graph=g1)
     t2 = await coord.create_task(params={}, graph=g2)
 
-    doc1 = await wait_task_finished(inmemory_db, t1, timeout=14.0)
-    doc2 = await wait_task_finished(inmemory_db, t2, timeout=14.0)
+    with log_context(task_id=t1):
+        doc1 = await wait_task_finished(inmemory_db, t1, timeout=14.0)
+        c1 = _get_count(doc1, "d")
+    with log_context(task_id=t2):
+        doc2 = await wait_task_finished(inmemory_db, t2, timeout=14.0)
+        c2 = _get_count(doc2, "d")
 
-    c1 = _get_count(doc1, "d")
-    c2 = _get_count(doc2, "d")
-    dbg("METRICS.CROSSTALK", t1=t1, c1=c1, t2=t2, c2=c2)
+    tlog.debug("metrics.crosstalk", event="metrics.crosstalk", t1=t1, c1=c1, t2=t2, c2=c2)
     assert c1 == 15
     assert c2 == 21

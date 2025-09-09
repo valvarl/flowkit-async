@@ -8,10 +8,10 @@ from enum import Enum
 import pytest
 import pytest_asyncio
 
+from flowkit.core.utils import stable_hash
 from tests.helpers import BROKER, AIOKafkaConsumerMock
 from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_flaky_once_handler, build_indexer_handler
-from tests.helpers.util import stable_hash
 
 # Ограничиваем роли для ускорения/избежания лишних handler'ов
 pytestmark = pytest.mark.worker_types("indexer,analyzer,flaky")
@@ -76,19 +76,17 @@ def graph_restart_flaky() -> dict:
 
 
 @pytest_asyncio.fixture
-async def workers(worker_factory, inmemory_db):
+async def workers(worker_factory, inmemory_db, tlog):
     """
     Start one worker for each role used here: indexer, analyzer, flaky.
     Auto-stopped via worker_factory teardown.
     """
+    tlog.debug("workers.spawn.start", event="workers.spawn.start", roles=["indexer", "analyzer", "flaky"])
     idx = build_indexer_handler(db=inmemory_db)
     ana = build_analyzer_handler(db=inmemory_db)
     flk = build_flaky_once_handler(db=inmemory_db)
-    ws = await worker_factory(
-        ("indexer", idx),
-        ("analyzer", ana),
-        ("flaky", flk),
-    )
+    ws = await worker_factory(("indexer", idx), ("analyzer", ana), ("flaky", flk))
+    tlog.debug("workers.spawn.done", event="workers.spawn.done")
     return {"indexer": ws[0], "analyzer": ws[1], "flaky": ws[2]}
 
 
@@ -96,7 +94,7 @@ async def workers(worker_factory, inmemory_db):
 
 
 @pytest.mark.asyncio
-async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, coord, workers):
+async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, coord, workers, tlog):
     """Cancel the task while upstream runs: downstream must not start."""
     cd, _ = env_and_imports
 
@@ -111,13 +109,16 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
 
     g = prime_graph(cd, graph_cancel_flow())
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", test_name="cascade_cancel_prevents_downstream", task_id=tid)
 
     # Ensure producer (indexer) started
     await wait_node_running(inmemory_db, tid, "w1", timeout=4.0)
+    tlog.debug("node.running", event="node.running", task_id=tid, node_id="w1")
 
     # Spy CANCELLED for indexer
     spy = AIOKafkaConsumerMock("status.indexer.v1", group_id="test.spy.cancel")
     await spy.start()
+    tlog.debug("spy.start", event="spy.start", topic="status.indexer.v1", group_id="test.spy.cancel")
     cancelled_seen = asyncio.Event()
 
     async def watch_cancel():
@@ -126,55 +127,58 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
             env = rec.value
             if env.get("msg_type") == "event" and (env.get("payload") or {}).get("kind") == "CANCELLED":
                 if env.get("task_id") == tid and env.get("node_id") == "w1":
+                    tlog.debug("cancel.event.observed", event="cancel.event.observed", task_id=tid, node_id="w1")
                     cancelled_seen.set()
                     return
 
     spy_task = asyncio.create_task(watch_cancel())
 
     # Cancel the whole task (in background to avoid blocking on grace windows)
+    tlog.debug("coordinator.cancel.call", event="coordinator.cancel.call", task_id=tid)
     cancel_bg = asyncio.create_task(cancel_method(tid, reason="test-cascade"))
 
     # Wait for CANCELLED from w1
     await asyncio.wait_for(cancelled_seen.wait(), timeout=5.0)
+    tlog.debug("cancel.event.received", event="cancel.event.received", task_id=tid)
 
-    # Ensure background cancel task finished (avoid leaked task / satisfy RUF006)
-    try:
+    # Ensure background cancel task finished
+    with suppress(Exception):
         await asyncio.wait_for(cancel_bg, timeout=5.0)
-    except Exception:
-        pass
 
     # Downstream must not start after cancel
     with pytest.raises(AssertionError):
         await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
+    tlog.debug("downstream.not_started", event="downstream.not_started", task_id=tid, node_id="w2")
 
     spy_task.cancel()
-    try:
+    with suppress(Exception):
         await spy_task
-    except Exception:
-        pass
     await spy.stop()
 
-    # Final sanity: task is cancelled/failed/finished OR coordinator has 'cancelled' flag
+    # Final sanity
     tdoc = await inmemory_db.tasks.find_one({"id": tid})
     assert tdoc is not None
     st = tdoc.get("status")
     if isinstance(st, Enum):
         st = st.value
+    tlog.debug("task.final.status", event="task.final.status", task_id=tid, status=st)
     assert st in ("failed", "finished", "cancelled") or ((tdoc.get("coordinator") or {}).get("cancelled") is True)
 
 
 @pytest.mark.asyncio
-async def test_restart_higher_epoch_ignores_old_events(env_and_imports, inmemory_db, coord, workers):
+async def test_restart_higher_epoch_ignores_old_events(env_and_imports, inmemory_db, coord, workers, tlog):
     """
     After accepting epoch>=1, re-inject an old event (epoch=0). Coordinator must ignore it by fencing.
     """
     cd, _ = env_and_imports
     g = prime_graph(cd, graph_restart_flaky())
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", test_name="restart_higher_epoch_ignores_old_events", task_id=tid)
 
     status_topic = "status.flaky.v1"
     spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.restart")
     await spy.start()
+    tlog.debug("spy.start", event="spy.start", topic=status_topic, group_id="test.spy.restart")
 
     async def collect_and_inject():
         saved_old = None
@@ -191,18 +195,24 @@ async def test_restart_higher_epoch_ignores_old_events(env_and_imports, inmemory
 
             if kind == "TASK_ACCEPTED" and epoch >= 1:
                 if saved_old:
+                    tlog.debug(
+                        "inject.stale.event",
+                        event="inject.stale.event",
+                        task_id=tid,
+                        kind=saved_old["payload"]["kind"],
+                        stale_epoch=0,
+                    )
                     await BROKER.produce(status_topic, saved_old)
                 return
 
     coll_task = asyncio.create_task(collect_and_inject())
 
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
+    tlog.debug("task.finished", event="task.finished", task_id=tid)
 
     coll_task.cancel()
-    try:
+    with suppress(Exception):
         await coll_task
-    except Exception:
-        pass
     await spy.stop()
 
     # Final node status should be finished with attempt_epoch >= 1
@@ -211,13 +221,14 @@ async def test_restart_higher_epoch_ignores_old_events(env_and_imports, inmemory
     st = fx.get("status")
     if isinstance(st, Enum):
         st = st.value
+    tlog.debug("node.final", event="node.final", node_id="fx", status=st, attempt_epoch=int(fx.get("attempt_epoch", 0)))
     assert st == "finished"
     assert await inmemory_db.artifacts.find_one({"task_id": tid, "node_id": "fx"}) is not None
     assert int(fx.get("attempt_epoch", 0)) >= 1
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inmemory_db, coord, workers):
+async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inmemory_db, coord, workers, tlog):
     """Cancel the task before any node can start: no node must enter 'running'."""
     cd, _ = env_and_imports
 
@@ -262,24 +273,26 @@ async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inm
         pytest.xfail("Coordinator cancel API is not implemented")
 
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug(
+        "task.created", event="task.created", test_name="cancel_before_any_start_keeps_all_nodes_idle", task_id=tid
+    )
 
     # Fire cancel immediately (do not await)
+    tlog.debug("coordinator.cancel.call", event="coordinator.cancel.call", task_id=tid)
     cancel_bg = asyncio.create_task(cancel_method(tid, reason="cancel-before-start"))
 
     with pytest.raises(AssertionError):
         await wait_node_running(inmemory_db, tid, "w1", timeout=1.0)
     with pytest.raises(AssertionError):
         await wait_node_running(inmemory_db, tid, "w2", timeout=1.0)
+    tlog.debug("nodes.stayed.idle", event="nodes.stayed.idle", task_id=tid, nodes=["w1", "w2"])
 
-    # Make sure background cancel completed (avoids dangling task)
-    try:
+    with suppress(Exception):
         await asyncio.wait_for(cancel_bg, timeout=5.0)
-    except Exception:
-        pass
 
 
 @pytest.mark.asyncio
-async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, coord, workers):
+async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, coord, workers, tlog):
     """
     Node 'flaky' fails on first attempt → becomes deferred with backoff.
     Cancel the task right after TASK_FAILED(epoch=1) and ensure no higher epoch is accepted.
@@ -300,16 +313,19 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
         pytest.xfail("Coordinator cancel API is not implemented")
 
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", test_name="cancel_on_deferred_prevents_retry", task_id=tid)
 
     status_topic = "status.flaky.v1"
     spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.defer_cancel")
     await spy.start()
+    tlog.debug("spy.start", event="spy.start", topic=status_topic, group_id="test.spy.defer_cancel")
 
     cancel_bg_task = None
     cancel_triggered = asyncio.Event()
     higher_epoch_accepted = asyncio.Event()
 
     async def watcher():
+        nonlocal cancel_bg_task
         while True:
             rec = await spy.getone()
             env = rec.value
@@ -319,16 +335,16 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
             kind = (env.get("payload") or {}).get("kind")
 
             if kind == "TASK_FAILED" and epoch == 1:
-                nonlocal cancel_bg_task
+                tlog.debug("deferred.observed", event="deferred.observed", task_id=tid, node_id="fx", epoch=epoch)
                 cancel_bg_task = asyncio.create_task(cancel_method(tid, reason="cancel-on-deferred"))
                 cancel_triggered.set()
                 return
 
             if kind == "TASK_ACCEPTED" and epoch >= 2:
+                tlog.debug("unexpected.accepted", event="unexpected.accepted", task_id=tid, node_id="fx", epoch=epoch)
                 higher_epoch_accepted.set()
 
     wtask = asyncio.create_task(watcher())
-
     await asyncio.wait_for(cancel_triggered.wait(), timeout=5.0)
 
     # Ensure a new epoch does NOT start within slightly more than backoff window
@@ -336,22 +352,18 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
         await asyncio.wait_for(higher_epoch_accepted.wait(), timeout=1.8)
 
     wtask.cancel()
-    try:
+    with suppress(Exception):
         await wtask
-    except Exception:
-        pass
     await spy.stop()
 
-    # If cancel was issued, ensure it completed
     if cancel_bg_task is not None:
-        try:
+        with suppress(Exception):
             await asyncio.wait_for(cancel_bg_task, timeout=5.0)
-        except Exception:
-            pass
+    tlog.debug("cancel.completed", event="cancel.completed", task_id=tid)
 
 
 @pytest.mark.asyncio
-async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemory_db, coord, workers):
+async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemory_db, coord, workers, tlog):
     """
     After a node restarts with a higher epoch, the coordinator must ignore a stale BATCH_OK
     from a lower epoch. Also ensure injected stale event doesn't create duplicate metrics.
@@ -359,10 +371,12 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     cd, _ = env_and_imports
     g = prime_graph(cd, graph_restart_flaky())
     tid = await coord.create_task(params={}, graph=g)
+    tlog.debug("task.created", event="task.created", test_name="restart_higher_epoch_ignores_old_batch_ok", task_id=tid)
 
     status_topic = "status.flaky.v1"
     spy = AIOKafkaConsumerMock(status_topic, group_id="test.spy.fence_bok")
     await spy.start()
+    tlog.debug("spy.start", event="spy.start", topic=status_topic, group_id="test.spy.fence_bok")
 
     async def collect_and_inject():
         saved_bok_e1 = None
@@ -385,6 +399,7 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
                     fake_old["attempt_epoch"] = 0
                     uid = (fake_old.get("payload") or {}).get("batch_uid")
                     fake_old["dedup_id"] = stable_hash({"bok": tid, "n": "fx", "e": 0, "uid": uid})
+                    tlog.debug("inject.stale.bok", event="inject.stale.bok", task_id=tid, batch_uid=uid)
                     await BROKER.produce(status_topic, fake_old)
                     return
 
@@ -395,12 +410,14 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
                     fake_old["attempt_epoch"] = 0
                     uid = (fake_old.get("payload") or {}).get("batch_uid")
                     fake_old["dedup_id"] = stable_hash({"bok": tid, "n": "fx", "e": 0, "uid": uid})
+                    tlog.debug("inject.stale.bok", event="inject.stale.bok", task_id=tid, batch_uid=uid)
                     await BROKER.produce(status_topic, fake_old)
                     return
 
     coll_task = asyncio.create_task(collect_and_inject())
 
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
+    tlog.debug("task.finished", event="task.finished", task_id=tid)
 
     coll_task.cancel()
     with suppress(asyncio.CancelledError):
@@ -423,6 +440,7 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     st = fx.get("status")
     if isinstance(st, Enum):
         st = st.value
+    tlog.debug("node.final", event="node.final", node_id="fx", status=st, attempt_epoch=int(fx.get("attempt_epoch", 0)))
     assert st == "finished"
     assert int(fx.get("attempt_epoch", 0)) >= 1
 
@@ -433,13 +451,15 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     )
     async for _ in cur:
         stale_count += 1
+    tlog.debug("stale.bok.count", event="stale.bok.count", count=stale_count)
     assert stale_count == 1, f"expected injected stale BATCH_OK to be recorded once, got {stale_count}"
 
     # Metrics deduplication: exactly one metrics doc per batch_uid for this node
-    counts = {}
-    cur = inmemory_db.metrics_raw.find({"task_id": tid, "node_id": "fx"})
-    async for m in cur:
+    counts: dict[str, int] = {}
+    cur2 = inmemory_db.metrics_raw.find({"task_id": tid, "node_id": "fx"})
+    async for m in cur2:
         uid = m.get("batch_uid")
         counts[uid] = counts.get(uid, 0) + 1
+    tlog.debug("metrics.batch_uid.counts", event="metrics.batch_uid.counts", counts=counts)
     assert counts, "no metrics were recorded"
     assert all(c == 1 for c in counts.values()), f"duplicate metrics found: {counts}"

@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import uuid
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer
-from tests.helpers.util import dbg
 
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
+from ..core.log import (
+    bind_context,
+    get_logger,
+    log_context,
+    swallow,
+    warn_once,
+)
 from ..core.time import Clock, SystemClock
 from ..core.utils import stable_hash
 from ..outbox.dispatcher import OutboxDispatcher
@@ -68,25 +75,46 @@ class Coordinator:
 
         self._gid = f"coord.{uuid.uuid4().hex[:6]}"
 
+        # logging
+        self.log = get_logger("coordinator")
+        bind_context(role="coordinator", gid=self._gid)
+        self.log.debug("coordinator.init", event="coord.init")
+
     # ---- lifecycle
     async def start(self) -> None:
+        # Helpful config print (silent by default unless tests enable stdout)
+        cfg_dump: Any
+        if hasattr(self.cfg, "model_dump"):  # pydantic v2
+            cfg_dump = self.cfg.model_dump()
+        elif hasattr(self.cfg, "dict"):  # pydantic v1
+            cfg_dump = self.cfg.dict()
+        else:
+            cfg_dump = getattr(self.cfg, "__dict__", str(self.cfg))
+        self.log.debug("coordinator.start", event="coord.start", cfg=cfg_dump)
+
         await self._ensure_indexes()
         await self.bus.start()
         await self._start_consumers()
         await self.outbox.start()
         self._running = True
-        self._spawn(self._scheduler_loop())
-        self._spawn(self._heartbeat_monitor())
-        self._spawn(self._finalizer_loop())
-        self._spawn(self._resume_inflight())
+        self._spawn(self._scheduler_loop(), name="scheduler")
+        self._spawn(self._heartbeat_monitor(), name="hb-monitor")
+        self._spawn(self._finalizer_loop(), name="finalizer")
+        self._spawn(self._resume_inflight(), name="resume-inflight")
+        self.log.debug("coordinator.started", event="coord.started", gid=self._gid)
 
     async def stop(self) -> None:
         self._running = False
         for t in list(self._tasks):
             t.cancel()
         self._tasks.clear()
-        await self.outbox.stop()
-        await self.bus.stop()
+        with swallow(
+            logger=self.log, code="outbox.stop", msg="outbox stop failed", level=logging.ERROR, expected=False
+        ):
+            await self.outbox.stop()
+        with swallow(logger=self.log, code="bus.stop", msg="bus stop failed", level=logging.ERROR, expected=False):
+            await self.bus.stop()
+        self.log.debug("coordinator.stopped", event="coord.stopped")
 
     async def restart(self) -> None:
         """
@@ -104,10 +132,28 @@ class Coordinator:
         # Keep the same _gid — the consumer group will reconnect
         await self.start()
 
-    def _spawn(self, coro):
-        t = asyncio.create_task(coro)
+    def _spawn(self, coro, *, name: str | None = None):
+        t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
         self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+
+        def _done(task: asyncio.Task) -> None:
+            self._tasks.discard(task)
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                self.log.error("task.crashed", event="coord.task.crashed", task=task.get_name(), exc_info=True)
+
+        t.add_done_callback(_done)
+
+    async def _commit_with_warn(self, c: AIOKafkaConsumer, *, code: str, msg: str) -> None:
+        """
+        Best-effort commit with single-shot warning on failure.
+        """
+        try:
+            await c.commit()
+        except Exception:
+            warn_once(self.log, code=code, msg=msg, level=logging.WARNING)
 
     # ---- consumers
     async def _start_consumers(self) -> None:
@@ -131,24 +177,72 @@ class Coordinator:
         try:
             while True:
                 msg = await c.getone()
-                env = Envelope.model_validate(msg.value)
+                try:
+                    env = Envelope.model_validate(msg.value)
+                except Exception:
+                    warn_once(
+                        self.log,
+                        code="reply.envelope.invalid",
+                        msg="Invalid reply envelope; skipping (suppressed next occurrences)",
+                        level=logging.WARNING,
+                    )
+                    await self._commit_with_warn(
+                        c,
+                        code="kafka.commit.reply",
+                        msg="Kafka commit failed in reply consumer (suppressed next occurrences)",
+                    )
+                    continue
                 if env.msg_type == MsgType.reply and env.role == Role.worker:
                     self.bus.push_reply(env.corr_id, env)
-                await c.commit()
+                await self._commit_with_warn(
+                    c,
+                    code="kafka.commit.reply",
+                    msg="Kafka commit failed in reply consumer (suppressed next occurrences)",
+                )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("reply.consumer.crashed", event="coord.reply.crash", exc_info=True)
 
     async def _run_announce_consumer(self, c: AIOKafkaConsumer) -> None:
         try:
             while True:
                 msg = await c.getone()
-                env = Envelope.model_validate(msg.value)
+                try:
+                    env = Envelope.model_validate(msg.value)
+                except Exception:
+                    warn_once(
+                        self.log,
+                        code="announce.envelope.invalid",
+                        msg="Invalid announce envelope; skipping",
+                        level=logging.WARNING,
+                    )
+                    await self._commit_with_warn(
+                        c,
+                        code="kafka.commit.announce",
+                        msg="Kafka commit failed in announce consumer (suppressed next occurrences)",
+                    )
+                    continue
+                if not (env.msg_type == MsgType.event and env.role == Role.worker):
+                    await self._commit_with_warn(
+                        c,
+                        code="kafka.commit.announce",
+                        msg="Kafka commit failed in announce consumer (suppressed next occurrences)",
+                    )
+                    continue
                 payload = env.payload
                 _k = payload.get("kind")
                 try:
                     kind = _k if isinstance(_k, EventKind) else EventKind(_k)
                 except Exception:
                     kind = None
+                    warn_once(
+                        self.log,
+                        code="announce.kind.invalid",
+                        msg="Invalid 'kind' in worker announce; skipping",
+                        level=logging.WARNING,
+                        payload=_k,
+                    )
                 try:
                     if kind == EventKind.WORKER_ONLINE:
                         await self.db.worker_registry.update_one(
@@ -166,10 +260,14 @@ class Coordinator:
                             },
                             upsert=True,
                         )
+                        self.log.debug("worker.online", event="coord.worker.online", worker_id=payload.get("worker_id"))
                     elif kind == EventKind.WORKER_OFFLINE:
                         await self.db.worker_registry.update_one(
                             {"worker_id": payload["worker_id"]},
                             {"$set": {"status": "offline", "last_seen": self.clock.now_dt()}},
+                        )
+                        self.log.debug(
+                            "worker.offline", event="coord.worker.offline", worker_id=payload.get("worker_id")
                         )
                     else:
                         await self.db.worker_registry.update_one(
@@ -178,9 +276,15 @@ class Coordinator:
                             upsert=True,
                         )
                 finally:
-                    await c.commit()
+                    await self._commit_with_warn(
+                        c,
+                        code="kafka.commit.announce",
+                        msg="Kafka commit failed in announce consumer (suppressed next occurrences)",
+                    )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("announce.consumer.crashed", event="coord.announce.crash", exc_info=True)
 
     async def _run_status_consumer(self, step_type: str, c: AIOKafkaConsumer) -> None:
         try:
@@ -189,34 +293,77 @@ class Coordinator:
                 try:
                     env = Envelope.model_validate(msg.value)
                 except Exception:
-                    await c.commit()
+                    warn_once(
+                        self.log,
+                        code="status.envelope.invalid",
+                        msg="Invalid status envelope; skipping (suppressed next occurrences)",
+                        level=logging.WARNING,
+                    )
+                    await self._commit_with_warn(
+                        c,
+                        code=f"kafka.commit.status.{step_type}",
+                        msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                    )
                     continue
 
+                # record raw worker event (best-effort)
                 try:
                     await self._record_worker_event(env)
                 except Exception:
-                    pass
+                    self.log.warning(
+                        "worker_event.record.failed",
+                        event="coord.worker_event.upsert_failed",
+                        exc_info=True,
+                        task_id=env.task_id,
+                        node_id=env.node_id,
+                    )
 
                 try:
                     tdoc = await self.db.tasks.find_one({"id": env.task_id}, {"graph": 1, "status": 1})
                     if not tdoc:
-                        await c.commit()
+                        self.log.debug(
+                            "status.task.missing",
+                            event="coord.status.task_missing",
+                            task_id=env.task_id,
+                            node_id=env.node_id,
+                        )
+                        await self._commit_with_warn(
+                            c,
+                            code=f"kafka.commit.status.{step_type}",
+                            msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                        )
                         continue
                     node = self._get_node(tdoc, env.node_id)
                     if not node or env.attempt_epoch != int(node.get("attempt_epoch", 0)):
-                        await c.commit()
+                        self.log.debug(
+                            "status.node.epoch_mismatch",
+                            event="coord.status.epoch_mismatch",
+                            task_id=env.task_id,
+                            node_id=env.node_id,
+                            env_epoch=env.attempt_epoch,
+                            node_epoch=int((node or {}).get("attempt_epoch", 0)),
+                        )
+                        await self._commit_with_warn(
+                            c,
+                            code=f"kafka.commit.status.{step_type}",
+                            msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                        )
                         continue
                 except Exception:
-                    await c.commit()
+                    self.log.warning("status.task.lookup_failed", event="coord.status.lookup_failed", exc_info=True)
+                    await self._commit_with_warn(
+                        c,
+                        code=f"kafka.commit.status.{step_type}",
+                        msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                    )
                     continue
 
-                try:
+                # touch last_event_recv_ms (best-effort)
+                with swallow(logger=self.log, code="task.touch", msg="task touch failed", level=logging.WARNING):
                     await self.db.tasks.update_one(
                         {"id": env.task_id},
                         {"$max": {"last_event_recv_ms": self.clock.now_ms()}, "$currentDate": {"updated_at": True}},
                     )
-                except Exception:
-                    pass
 
                 node_status = self._to_runstate(node.get("status"))
 
@@ -225,6 +372,13 @@ class Coordinator:
                     kind = _k if isinstance(_k, EventKind) else EventKind(_k)
                 except Exception:
                     kind = None
+                    warn_once(
+                        self.log,
+                        code="status.kind.invalid",
+                        msg="Invalid 'kind' in status payload; skipping",
+                        level=logging.WARNING,
+                        payload=_k,
+                    )
 
                 needs_running = {
                     EventKind.TASK_ACCEPTED,
@@ -243,36 +397,57 @@ class Coordinator:
                         allow_even_if_not_running = False
 
                 if (kind in needs_running) and (node_status != RunState.running) and not allow_even_if_not_running:
-                    await c.commit()
+                    self.log.debug(
+                        "status.skipped.not_running",
+                        event="coord.status.not_running",
+                        task_id=env.task_id,
+                        node_id=env.node_id,
+                        kind=str(kind),
+                        node_status=str(node_status),
+                    )
+                    await self._commit_with_warn(
+                        c,
+                        code=f"kafka.commit.status.{step_type}",
+                        msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                    )
                     continue
+
                 try:
-                    if kind == EventKind.TASK_ACCEPTED:
-                        await self._on_task_accepted(env)
-                    elif kind == EventKind.TASK_HEARTBEAT:
-                        await self._on_task_heartbeat(env)
-                    elif kind == EventKind.TASK_RESUMED:
-                        await self._on_task_heartbeat(env)
-                    elif kind == EventKind.BATCH_OK:
-                        await self._on_batch_ok(env)
-                    elif kind == EventKind.BATCH_FAILED:
-                        await self._on_batch_failed(env)
-                    elif kind == EventKind.TASK_DONE:
-                        await self._on_task_done(env)
-                    elif kind == EventKind.TASK_FAILED:
-                        await self._on_task_failed(env)
-                    elif kind == EventKind.CANCELLED:
-                        await self._on_cancelled(env)
+                    with log_context(
+                        task_id=env.task_id,
+                        node_id=env.node_id,
+                        attempt_epoch=env.attempt_epoch,
+                        step_type=env.step_type,
+                    ):
+                        if kind == EventKind.TASK_ACCEPTED:
+                            await self._on_task_accepted(env)
+                        elif kind == EventKind.TASK_HEARTBEAT:
+                            await self._on_task_heartbeat(env)
+                        elif kind == EventKind.TASK_RESUMED:
+                            await self._on_task_heartbeat(env)
+                        elif kind == EventKind.BATCH_OK:
+                            await self._on_batch_ok(env)
+                        elif kind == EventKind.BATCH_FAILED:
+                            await self._on_batch_failed(env)
+                        elif kind == EventKind.TASK_DONE:
+                            await self._on_task_done(env)
+                        elif kind == EventKind.TASK_FAILED:
+                            await self._on_task_failed(env)
+                        elif kind == EventKind.CANCELLED:
+                            await self._on_cancelled(env)
                 finally:
-                    try:
-                        await c.commit()
-                    except Exception:
-                        pass
+                    await self._commit_with_warn(
+                        c,
+                        code=f"kafka.commit.status.{step_type}",
+                        msg=f"Kafka commit failed in status consumer for {step_type} (suppressed next occurrences)",
+                    )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("status.consumer.crashed", event="coord.status.crash", step_type=step_type, exc_info=True)
 
     # ---- DAG utils
     def _get_node(self, task_doc: dict[str, Any], node_id: str) -> dict[str, Any] | None:
-        # mypy: make node list type explicit to avoid Any
         nodes: list[dict[str, Any]] = (task_doc.get("graph") or {}).get("nodes") or []
         for n in nodes:
             if n.get("node_id") == node_id:
@@ -306,6 +481,7 @@ class Coordinator:
             last_event_recv_ms=self.clock.now_ms(),
         ).model_dump(mode="json")
         await self.db.tasks.insert_one(doc)
+        self.log.debug("task.created", event="coord.task.created", task_id=task_id)
         return task_id
 
     # ---- Scheduler loop
@@ -316,6 +492,8 @@ class Coordinator:
                 await self.clock.sleep_ms(self.cfg.scheduler_tick_ms)
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("scheduler.loop.crashed", event="coord.scheduler.crash", exc_info=True)
 
     def _to_runstate(self, v):
         if isinstance(v, RunState):
@@ -415,8 +593,16 @@ class Coordinator:
                     }
                 },
             )
+            self.log.debug("coord.fn.done", event="coord.fn.done", node_id=node["node_id"])
         except Exception as e:
             backoff = int((node.get("retry_policy") or {}).get("backoff_sec") or 300)
+            self.log.error(
+                "coord.fn.failed",
+                event="coord.fn.failed",
+                node_id=node.get("node_id"),
+                backoff_sec=backoff,
+                exc_info=True,
+            )
             await self.db.tasks.update_one(
                 {"id": task_doc["id"], "graph.nodes.node_id": node["node_id"]},
                 {
@@ -447,8 +633,16 @@ class Coordinator:
         old_epoch = int(node.get("attempt_epoch", 0))
         new_epoch = old_epoch + 1
 
-        dbg("COORD.PREFLIGHT", task_id=task_id, node_id=node_id, old_epoch=old_epoch, new_epoch=new_epoch)
+        self.log.debug(
+            "preflight",
+            event="coord.preflight",
+            task_id=task_id,
+            node_id=node_id,
+            old_epoch=old_epoch,
+            new_epoch=new_epoch,
+        )
 
+        # already complete?
         try:
             cnt = await self.db.artifacts.count_documents(
                 {"task_id": task_id, "node_id": node_id, "status": "complete"}
@@ -464,9 +658,12 @@ class Coordinator:
                         }
                     },
                 )
+                self.log.debug("preflight.complete.cached", event="coord.preflight.complete", node_id=node_id)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.warning(
+                "preflight.complete.check_failed", event="coord.preflight.complete_check_failed", exc_info=e
+            )
 
         discover_env = Envelope(
             msg_type=MsgType.query,
@@ -487,10 +684,10 @@ class Coordinator:
         try:
             await asyncio.wait_for(ev.wait(), timeout=self.cfg.discovery_window_sec)
         except TimeoutError:
-            pass
+            self.log.debug("preflight.discover.timeout", event="coord.preflight.discover_timeout")
 
         replies = self.bus.collect_replies(discover_env.corr_id)
-        dbg("COORD.DISCOVER.REPLIES", count=len(replies))
+        self.log.debug("preflight.discover.replies", event="coord.preflight.replies", count=len(replies))
 
         prev_lease_worker = ((node.get("lease") or {}).get("worker_id")) or None
 
@@ -523,8 +720,9 @@ class Coordinator:
                     }
                 },
             )
-            dbg(
-                "COORD.PREFLIGHT.ADOPT",
+            self.log.debug(
+                "preflight.adopt",
+                event="coord.preflight.adopt",
                 task_id=task_id,
                 node_id=node_id,
                 epoch=int(node.get("attempt_epoch", 0)),
@@ -535,7 +733,7 @@ class Coordinator:
 
         complete = any((r.payload.get("artifacts") or {}).get("complete") for r in replies)
         if complete:
-            dbg("COORD.PREFLIGHT.COMPLETE", node_id=node_id, set_epoch=new_epoch)
+            self.log.debug("preflight.complete.snapshot", event="coord.preflight.complete_snapshot", node_id=node_id)
             await self.db.tasks.update_one(
                 {"id": task_id, "graph.nodes.node_id": node_id},
                 {
@@ -548,6 +746,7 @@ class Coordinator:
             )
             return
 
+        # soft gating after discovery window
         try:
             fresh = await self.db.tasks.find_one({"id": task_id}, {"graph": 1})
             fresh_node = self._get_node(fresh, node_id) if fresh else None
@@ -555,18 +754,19 @@ class Coordinator:
             status = self._to_runstate((fresh_node or {}).get("status"))
             if status not in (RunState.deferred,):
                 if max(0, self.clock.now_ms() - last) < self.cfg.discovery_window_ms:
-                    dbg(
-                        "COORD.PREFLIGHT.GATE.SKIP",
+                    self.log.debug(
+                        "preflight.gate.skip",
+                        event="coord.preflight.gate_skip",
                         node_id=node_id,
                         last_event_ms=last,
                         now=self.clock.now_ms(),
                         window_ms=self.cfg.discovery_window_ms,
                     )
                     return
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.warning("preflight.gate.check_failed", event="coord.preflight.gate_check_failed", exc_info=e)
 
-        # CAS: transition node to running only if it's still queued/deferred and attempt_epoch unchanged
+        # CAS transition
         q = {
             "id": task_id,
             "graph.nodes": {
@@ -586,10 +786,14 @@ class Coordinator:
         }
         cas_res = await self.db.tasks.find_one_and_update(q, upd)
         if not cas_res:
-            dbg("COORD.PREFLIGHT.CAS.SKIP", node_id=node_id, reason="predicate_failed")
+            self.log.debug(
+                "preflight.cas.skip", event="coord.preflight.cas_skip", node_id=node_id, reason="predicate_failed"
+            )
             return
 
-        dbg("COORD.PREFLIGHT.CAS.OK", task_id=task_id, node_id=node_id, epoch=new_epoch)
+        self.log.debug(
+            "preflight.cas.ok", event="coord.preflight.cas_ok", task_id=task_id, node_id=node_id, epoch=new_epoch
+        )
 
         cancel_token = str(uuid.uuid4())
         cmd = CmdTaskStart(
@@ -612,42 +816,44 @@ class Coordinator:
             ts_ms=self.clock.now_ms(),
             payload=cmd.model_dump(),
         )
-        dbg("COORD.CMD.START", node_id=node_id, epoch=new_epoch, cancel_token=cancel_token)
+        self.log.debug(
+            "cmd.start", event="coord.cmd.start", node_id=node_id, epoch=new_epoch, cancel_token=cancel_token
+        )
         await self._enqueue_cmd(env)
 
     # ---- event handlers
     async def _record_worker_event(self, env: Envelope) -> None:
         evh = env.dedup_id
-        try:
-            await self.db.worker_events.update_one(
-                {"task_id": env.task_id, "node_id": env.node_id, "event_hash": evh},
-                {
-                    "$setOnInsert": {
-                        "task_id": env.task_id,
-                        "node_id": env.node_id,
-                        "step_type": env.step_type,
-                        "event_hash": evh,
-                        "payload": env.payload,
-                        "ts_ms": env.ts_ms,
-                        "recv_ts_ms": self.clock.now_ms(),
-                        "attempt_epoch": env.attempt_epoch,
-                        "created_at": self.clock.now_dt(),
-                        "metrics_applied": False,
-                    }
-                },
-                upsert=True,
-            )
-        except Exception:
-            pass
-        await self.db.tasks.update_one(
-            {"id": env.task_id},
-            {"$max": {"last_event_recv_ms": self.clock.now_ms()}, "$currentDate": {"updated_at": True}},
+        await self.db.worker_events.update_one(
+            {"task_id": env.task_id, "node_id": env.node_id, "event_hash": evh},
+            {
+                "$setOnInsert": {
+                    "task_id": env.task_id,
+                    "node_id": env.node_id,
+                    "step_type": env.step_type,
+                    "event_hash": evh,
+                    "payload": env.payload,
+                    "ts_ms": env.ts_ms,
+                    "recv_ts_ms": self.clock.now_ms(),
+                    "attempt_epoch": env.attempt_epoch,
+                    "created_at": self.clock.now_dt(),
+                    "metrics_applied": False,
+                }
+            },
+            upsert=True,
         )
+        # Touch last_event (best-effort)
+        with swallow(logger=self.log, code="task.touch", msg="task touch failed", level=logging.WARNING):
+            await self.db.tasks.update_one(
+                {"id": env.task_id},
+                {"$max": {"last_event_recv_ms": self.clock.now_ms()}, "$currentDate": {"updated_at": True}},
+            )
 
     async def _on_task_accepted(self, env: Envelope) -> None:
         p = EvTaskAccepted.model_validate(env.payload)
-        dbg(
-            "COORD.ON_ACCEPT",
+        self.log.debug(
+            "on.accept",
+            event="coord.on.accept",
             node_id=env.node_id,
             epoch=env.attempt_epoch,
             worker_id=p.worker_id,
@@ -667,8 +873,9 @@ class Coordinator:
 
     async def _on_task_heartbeat(self, env: Envelope) -> None:
         p = EvHeartbeat.model_validate(env.payload)
-        dbg(
-            "COORD.ON_HEARTBEAT",
+        self.log.debug(
+            "on.heartbeat",
+            event="coord.on.heartbeat",
             node_id=env.node_id,
             epoch=env.attempt_epoch,
             worker_id=p.worker_id,
@@ -774,21 +981,30 @@ class Coordinator:
                 "ts_ms": env.ts_ms,
                 "created_at": self.clock.now_dt(),
             }
-            try:
+            with swallow(
+                logger=self.log,
+                code="metrics.insert",
+                msg="metrics insert failed",
+                level=logging.WARNING,
+                expected=True,
+            ):
                 await self.db.metrics_raw.insert_one(doc)
-            except Exception:
-                pass
 
-        try:
+        with swallow(
+            logger=self.log, code="children.first_batch", msg="children start check failed", level=logging.WARNING
+        ):
             tdoc = await self.db.tasks.find_one({"id": env.task_id}, {"id": 1, "graph": 1})
             if tdoc:
                 await self._maybe_start_children_on_first_batch(tdoc, env.node_id)
-        except Exception:
-            pass
 
     async def _on_batch_failed(self, env: Envelope) -> None:
         p = EvBatchFailed.model_validate(env.payload)
-        try:
+        with swallow(
+            logger=self.log,
+            code="metrics.insert_failed",
+            msg="metrics insert for failed batch failed",
+            level=logging.WARNING,
+        ):
             await self.db.metrics_raw.insert_one(
                 {
                     "task_id": env.task_id,
@@ -802,21 +1018,24 @@ class Coordinator:
                     "created_at": self.clock.now_dt(),
                 }
             )
-        except Exception:
-            pass
-        try:
+        with swallow(
+            logger=self.log,
+            code="artifact.update_failed",
+            msg="artifact update for failed batch failed",
+            level=logging.WARNING,
+        ):
             await self.db.artifacts.update_one(
                 {"task_id": env.task_id, "node_id": env.node_id, "batch_uid": p.batch_uid},
                 {"$set": {"status": "failed", "error": p.reason_code, "updated_at": self.clock.now_dt()}},
                 upsert=True,
             )
-        except Exception:
-            pass
 
     async def _on_task_done(self, env: Envelope) -> None:
         p = EvTaskDone.model_validate(env.payload)
         if p.metrics:
-            try:
+            with swallow(
+                logger=self.log, code="metrics.insert_final", msg="final metrics insert failed", level=logging.WARNING
+            ):
                 await self.db.metrics_raw.insert_one(
                     {
                         "task_id": env.task_id,
@@ -829,8 +1048,6 @@ class Coordinator:
                         "created_at": self.clock.now_dt(),
                     }
                 )
-            except Exception:
-                pass
         if p.artifacts_ref:
             await self.db.artifacts.update_one(
                 {
@@ -918,6 +1135,8 @@ class Coordinator:
                 await self.clock.sleep_ms(self.cfg.hb_monitor_tick_ms)
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("hb.monitor.crashed", event="coord.hb.crash", exc_info=True)
 
     async def _finalizer_loop(self) -> None:
         try:
@@ -926,6 +1145,8 @@ class Coordinator:
                 await self.clock.sleep_ms(self.cfg.finalizer_tick_ms)
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("finalizer.loop.crashed", event="coord.finalizer.crash", exc_info=True)
 
     async def _finalize_nodes_and_tasks(self) -> None:
         cur = self.db.tasks.find(
@@ -947,9 +1168,18 @@ class Coordinator:
                     {"id": t["id"]},
                     {"$set": {"status": RunState.finished, "finished_at": self.clock.now_dt(), "result": result}},
                 )
+                self.log.debug(
+                    "task.finalized",
+                    event="coord.task.finalized",
+                    task_id=t["id"],
+                    cancelled=bool(cancelled),
+                    all_finished=bool(all_finished),
+                )
 
     async def _cascade_cancel(self, task_id: str, *, reason: str) -> None:
-        try:
+        with swallow(
+            logger=self.log, code="task.flag_cancel", msg="task cancel flag update failed", level=logging.WARNING
+        ):
             await self.db.tasks.update_one(
                 {"id": task_id},
                 {
@@ -961,15 +1191,18 @@ class Coordinator:
                     "$currentDate": {"updated_at": True},
                 },
             )
-        except Exception:
-            pass
 
         doc = await self.db.tasks.find_one({"id": task_id}, {"graph": 1})
         if not doc:
             return
         for n in doc.get("graph", {}).get("nodes") or []:
             if n.get("status") in [RunState.running, RunState.deferred, RunState.queued]:
-                try:
+                with swallow(
+                    logger=self.log,
+                    code="node.flag_cancel",
+                    msg="node cancel flag update failed",
+                    level=logging.WARNING,
+                ):
                     await self.db.tasks.update_one(
                         {"id": task_id, "graph.nodes.node_id": n["node_id"]},
                         {
@@ -980,8 +1213,6 @@ class Coordinator:
                             }
                         },
                     )
-                except Exception:
-                    pass
 
                 lease = n.get("lease") or {}
                 worker_id = lease.get("worker_id")
@@ -1027,7 +1258,9 @@ class Coordinator:
         doc = await self.db.tasks.find_one({"id": task_id}, {"id": 1, "graph": 1, "status": 1})
         if not doc:
             return False
-        try:
+        with swallow(
+            logger=self.log, code="task.flag_cancel", msg="task cancel flag update failed", level=logging.WARNING
+        ):
             await self.db.tasks.update_one(
                 {"id": task_id},
                 {
@@ -1038,29 +1271,84 @@ class Coordinator:
                     }
                 },
             )
-        except Exception:
-            pass
         await self._cascade_cancel(task_id, reason=reason)
         return True
 
     async def _ensure_indexes(self) -> None:
-        try:
+        # Index creation often unsupported in test doubles; keep warnings but don't fail.
+        with swallow(
+            logger=self.log, code="idx.tasks", msg="create index tasks failed", level=logging.WARNING, expected=True
+        ):
             await self.db.tasks.create_index([("status", 1), ("updated_at", 1)], name="ix_task_status_updated")
+        with swallow(
+            logger=self.log,
+            code="idx.worker_registry",
+            msg="create index worker_registry failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.worker_registry.create_index([("worker_id", 1)], unique=True, name="uniq_worker")
+        with swallow(
+            logger=self.log,
+            code="idx.artifacts1",
+            msg="create index artifacts (task,node) failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.artifacts.create_index([("task_id", 1), ("node_id", 1)], name="ix_artifacts_task_node")
+        with swallow(
+            logger=self.log,
+            code="idx.artifacts2",
+            msg="create index artifacts batch failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.artifacts.create_index(
                 [("task_id", 1), ("node_id", 1), ("batch_uid", 1)], unique=True, sparse=True, name="uniq_artifact_batch"
             )
+        with swallow(
+            logger=self.log,
+            code="idx.outbox.fp",
+            msg="create index outbox fp failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.outbox.create_index([("fp", 1)], unique=True, name="uniq_outbox_fp")
+        with swallow(
+            logger=self.log,
+            code="idx.outbox.state_next",
+            msg="create index outbox state_next failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.outbox.create_index([("state", 1), ("next_attempt_at_ms", 1)], name="ix_outbox_state_next_ms")
+        with swallow(
+            logger=self.log,
+            code="idx.metrics.batch",
+            msg="create index metrics batch failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.metrics_raw.create_index(
                 [("task_id", 1), ("node_id", 1), ("batch_uid", 1)], unique=True, name="uniq_metrics_batch"
             )
+        with swallow(
+            logger=self.log,
+            code="idx.metrics.ttl",
+            msg="create ttl index metrics_raw failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.metrics_raw.create_index(
                 [("created_at", 1)], name="ttl_metrics_raw", expireAfterSeconds=14 * 24 * 3600
             )
+        with swallow(
+            logger=self.log,
+            code="idx.worker_events",
+            msg="create index worker_events failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.worker_events.create_index(
                 [("task_id", 1), ("node_id", 1), ("event_hash", 1)], unique=True, name="uniq_worker_event"
             )
-        except Exception:
-            pass

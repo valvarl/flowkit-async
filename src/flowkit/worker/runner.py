@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
+import logging
 import uuid
 from collections import OrderedDict
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-from tests.helpers.util import dbg
 
 from ..core.config import WorkerConfig
+from ..core.log import (
+    bind_context,
+    get_logger,
+    log_context,
+    swallow,
+    warn_once,
+)
 from ..core.time import Clock, SystemClock
 from ..core.utils import dumps, loads, stable_hash
 from ..protocol.messages import (
@@ -31,11 +37,6 @@ from .handlers.base import Batch, BatchResult, RoleHandler
 from .handlers.echo import EchoHandler
 from .input.pull_adapters import build_input_adapters
 from .state import ActiveRun, LocalStateManager
-
-
-def _json_log(clock: Clock, **kv: Any) -> None:
-    ts = clock.now_dt().isoformat()
-    print(json.dumps({"ts": ts, **kv}, ensure_ascii=False), flush=True)
 
 
 class Worker:
@@ -96,8 +97,23 @@ class Worker:
 
         self._main_tasks: set[asyncio.Task] = set()
 
+        # logging
+        self.log = get_logger("worker")
+        bind_context(role="worker", worker_id=self.worker_id, version=self.worker_version)
+        self.log.debug("worker.init", event="worker.init", roles=self.cfg.roles, version=self.worker_version)
+
     # ---------- lifecycle ----------
     async def start(self) -> None:
+        # Helpful config print (silent by default unless tests enable stdout)
+        cfg_dump: Any
+        if hasattr(self.cfg, "model_dump"):  # pydantic v2
+            cfg_dump = self.cfg.model_dump()
+        elif hasattr(self.cfg, "dict"):  # pydantic v1
+            cfg_dump = self.cfg.dict()
+        else:
+            cfg_dump = getattr(self.cfg, "__dict__", str(self.cfg))
+        self.log.debug("worker.start", event="worker.start", cfg=cfg_dump)
+
         await self._ensure_indexes()
         self._producer = AIOKafkaProducer(
             bootstrap_servers=self.cfg.kafka_bootstrap, value_serializer=dumps, enable_idempotence=True
@@ -165,7 +181,14 @@ class Worker:
         self._spawn(self._periodic_announce())
 
         if self.active:
-            _json_log(self.clock, event="recovery_present", task_id=self.active.task_id, node_id=self.active.node_id)
+            self.log.debug(
+                "worker.recovery_present",
+                event="worker.recovery_present",
+                task_id=self.active.task_id,
+                node_id=self.active.node_id,
+            )
+
+        self.log.debug("worker.started", event="worker.started", worker_id=self.worker_id)
 
     async def stop(self) -> None:
         self._stopping = True
@@ -174,34 +197,58 @@ class Worker:
         self._main_tasks.clear()
 
         if self._query_consumer:
-            try:
+            with swallow(
+                logger=self.log,
+                code="worker.query_consumer.stop",
+                msg="query consumer stop failed",
+                level=logging.WARNING,
+            ):
                 await self._query_consumer.stop()
-            except Exception:
-                pass
         if self._signals_consumer:
-            try:
+            with swallow(
+                logger=self.log,
+                code="worker.signals_consumer.stop",
+                msg="signals consumer stop failed",
+                level=logging.WARNING,
+            ):
                 await self._signals_consumer.stop()
-            except Exception:
-                pass
         for c in self._cmd_consumers.values():
-            try:
+            with swallow(
+                logger=self.log, code="worker.cmd_consumer.stop", msg="cmd consumer stop failed", level=logging.WARNING
+            ):
                 await c.stop()
-            except Exception:
-                pass
         self._cmd_consumers.clear()
 
         if self._producer:
-            try:
+            with swallow(
+                logger=self.log, code="worker.announce.offline", msg="announce offline failed", level=logging.WARNING
+            ):
                 await self._send_announce(EventKind.WORKER_OFFLINE, extra={"worker_id": self.worker_id})
+            with swallow(
+                logger=self.log, code="worker.producer.stop", msg="producer stop failed", level=logging.WARNING
+            ):
                 await self._producer.stop()
-            except Exception:
-                pass
         self._producer = None
 
-    def _spawn(self, coro):
-        t = asyncio.create_task(coro)
+    def _spawn(self, coro, *, name: str | None = None) -> None:
+        t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
         self._main_tasks.add(t)
-        t.add_done_callback(self._main_tasks.discard)
+
+        def _done(task: asyncio.Task) -> None:
+            self._main_tasks.discard(task)
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                self.log.error("worker.task.crashed", event="worker.task.crashed", task=task.get_name(), exc_info=True)
+
+        t.add_done_callback(_done)
+
+    async def _commit_with_warn(self, consumer: AIOKafkaConsumer, *, code: str, msg: str) -> None:
+        try:
+            await consumer.commit()
+        except Exception:
+            warn_once(self.log, code=code, msg=msg, level=logging.WARNING)
 
     # ---------- Kafka send helpers ----------
     async def _send_status(self, role: str, env: Envelope) -> None:
@@ -268,13 +315,25 @@ class Worker:
                 msg = await consumer.getone()
                 env = Envelope.model_validate(msg.value)
                 if await self._seen_or_add(env.dedup_id):
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code=f"worker.commit.cmd.{role}",
+                        msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+                    )
                     continue
                 if env.msg_type != MsgType.cmd or env.role != Role.coordinator:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code=f"worker.commit.cmd.{role}",
+                        msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+                    )
                     continue
                 if env.step_type != role:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code=f"worker.commit.cmd.{role}",
+                        msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+                    )
                     continue
 
                 _k = env.payload.get("cmd")
@@ -288,15 +347,25 @@ class Worker:
                 elif kind == CommandKind.TASK_CANCEL:
                     await self._handle_task_cancel(role, env, consumer)
                 else:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code=f"worker.commit.cmd.{role}",
+                        msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+                    )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("worker.cmd.loop.crashed", event="worker.cmd.loop.crashed", role=role, exc_info=True)
 
     async def _handle_task_start(self, role: str, env: Envelope, consumer: AIOKafkaConsumer) -> None:
         cmd = CmdTaskStart.model_validate(env.payload)
         async with self._busy_lock:
             if self._busy:
-                await consumer.commit()
+                await self._commit_with_warn(
+                    consumer,
+                    code=f"worker.commit.cmd.{role}",
+                    msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+                )
                 return
 
             if self.active and not (self.active.task_id == env.task_id and self.active.node_id == env.node_id):
@@ -340,8 +409,9 @@ class Worker:
                     "lease_deadline_ts_ms": lease_deadline_ms,
                 },
             )
-            dbg(
-                "WORKER.SEND.ACCEPTED",
+            self.log.debug(
+                "worker.send.accepted",
+                event="worker.send.accepted",
                 task_id=env.task_id,
                 node_id=env.node_id,
                 epoch=env.attempt_epoch,
@@ -351,11 +421,21 @@ class Worker:
             )
             await self._send_status(role, acc_env)
 
-            await self._pause_all_cmd_consumers()
-            self._spawn(self._heartbeat_loop(role))
-            self._spawn(self._run_handler(role, env, cmd))
+            with log_context(
+                task_id=env.task_id,
+                node_id=env.node_id,
+                attempt_epoch=env.attempt_epoch,
+                step_type=role,
+            ):
+                await self._pause_all_cmd_consumers()
+                self._spawn(self._heartbeat_loop(role))
+                self._spawn(self._run_handler(role, env, cmd))
 
-            await consumer.commit()
+            await self._commit_with_warn(
+                consumer,
+                code=f"worker.commit.cmd.{role}",
+                msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+            )
 
     async def _handle_task_cancel(self, role: str, env: Envelope, consumer: AIOKafkaConsumer) -> None:
         _ = CmdTaskCancel.model_validate(env.payload)
@@ -369,7 +449,11 @@ class Worker:
             self._cancel_flag.set()
             self.active.state = "cancelling"
             await self.state.write_active(self.active)
-        await consumer.commit()
+        await self._commit_with_warn(
+            consumer,
+            code=f"worker.commit.cmd.{role}",
+            msg=f"Kafka commit failed in cmd consumer for {role} (suppressed next occurrences)",
+        )
 
     # ---------- Handler execution ----------
     async def _run_handler(self, role: str, start_env: Envelope, cmd: CmdTaskStart) -> None:
@@ -434,13 +518,13 @@ class Worker:
                 adapter_kwargs.setdefault("eof_on_task_done", True)
                 adapter_kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
 
-                _json_log(
-                    self.clock,
-                    event="adapter_selected",
-                    node=self.active.node_id,
+                self.log.debug(
+                    "worker.adapter.selected",
+                    event="worker.adapter.selected",
+                    node_id=self.active.node_id,
                     adapter=adapter_name,
                     from_nodes=from_nodes,
-                    kwargs=adapter_kwargs,
+                    adapter_kwargs=adapter_kwargs,
                 )
 
                 async def _iter_batches_adapter():
@@ -454,10 +538,10 @@ class Worker:
                     async for b in it:
                         if isinstance(b.payload, dict):
                             _cnt = len(b.payload.get("items") or b.payload.get("skus") or [])
-                            _json_log(
-                                self.clock,
-                                event="adapter_batch",
-                                node=self.active.node_id,
+                            self.log.debug(
+                                "worker.adapter.batch",
+                                event="worker.adapter.batch",
+                                node_id=self.active.node_id,
                                 batch_uid=b.batch_uid,
                                 items=_cnt,
                             )
@@ -465,7 +549,11 @@ class Worker:
 
                 batch_iter = _iter_batches_adapter()
             else:
-                _json_log(self.clock, event="handler_iter_batches_fallback", node=self.active.node_id)
+                self.log.debug(
+                    "worker.handler.iter_batches_fallback",
+                    event="worker.handler.iter_batches_fallback",
+                    node_id=self.active.node_id,
+                )
                 batch_iter = handler.iter_batches(loaded)
 
             self._spawn(self._db_cancel_watch_loop())
@@ -487,7 +575,13 @@ class Worker:
                     try:
                         artifacts_ref = await artifacts.upsert_partial(uid, res.metrics or {})
                     except Exception as e:
-                        _json_log(self.clock, level="ERROR", msg="upsert_partial failed", batch_uid=uid, error=str(e))
+                        self.log.error(
+                            "worker.artifacts.upsert_partial.failed",
+                            event="worker.artifacts.upsert_partial.failed",
+                            batch_uid=uid,
+                            error=str(e),
+                            exc_info=True,
+                        )
                         artifacts_ref = artifacts_ref or {"batch_uid": uid}
                     await self._emit_batch_ok(role, start_env, batch, res, uid, override_artifacts_ref=artifacts_ref)
                     continue
@@ -508,8 +602,10 @@ class Worker:
 
         except asyncio.CancelledError:
             if self._stopping:
-                _json_log(
-                    self.clock, event="shutdown_preserve_state", node=self.active.node_id if self.active else None
+                self.log.debug(
+                    "worker.shutdown.preserve_state",
+                    event="worker.shutdown.preserve_state",
+                    node_id=self.active.node_id if self.active else None,
                 )
             else:
                 await self._emit_cancelled(role, start_env, "cancelled")
@@ -566,8 +662,9 @@ class Worker:
                         "lease_deadline_ts_ms": lease_deadline_ms,
                     },
                 )
-                dbg(
-                    "WORKER.SEND.HB",
+                self.log.debug(
+                    "worker.send.hb",
+                    event="worker.send.hb",
                     task_id=self.active.task_id,
                     node_id=self.active.node_id,
                     epoch=self.active.attempt_epoch,
@@ -707,7 +804,11 @@ class Worker:
                 msg = await consumer.getone()
                 env = Envelope.model_validate(msg.value)
                 if env.msg_type != MsgType.query or env.role != Role.coordinator:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.query",
+                        msg="Kafka commit failed in query consumer (suppressed next occurrences)",
+                    )
                     continue
                 try:
                     qkind = env.payload.get("query")
@@ -715,10 +816,18 @@ class Worker:
                 except Exception:
                     qkind = None
                 if qkind != QueryKind.TASK_DISCOVER:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.query",
+                        msg="Kafka commit failed in query consumer (suppressed next occurrences)",
+                    )
                     continue
                 if env.step_type not in self.cfg.roles:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.query",
+                        msg="Kafka commit failed in query consumer (suppressed next occurrences)",
+                    )
                     continue
 
                 ar = self.active
@@ -771,9 +880,15 @@ class Worker:
                     corr_id=env.corr_id,
                 )
                 await self._send_reply(reply)
-                await consumer.commit()
+                await self._commit_with_warn(
+                    consumer,
+                    code="worker.commit.query",
+                    msg="Kafka commit failed in query consumer (suppressed next occurrences)",
+                )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("worker.query.loop.crashed", event="worker.query.loop.crashed", exc_info=True)
 
     async def _periodic_announce(self) -> None:
         try:
@@ -799,22 +914,38 @@ class Worker:
                 env = Envelope.model_validate(msg.value)
 
                 if env.target_worker_id and env.target_worker_id != self.worker_id:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.signals",
+                        msg="Kafka commit failed in signals consumer (suppressed next occurrences)",
+                    )
                     continue
 
                 pay = env.payload or {}
                 if (pay.get("sig") or "").upper() != "CANCEL":
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.signals",
+                        msg="Kafka commit failed in signals consumer (suppressed next occurrences)",
+                    )
                     continue
                 try:
                     sc = SigCancel.model_validate(pay)
                 except Exception:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.signals",
+                        msg="Kafka commit failed in signals consumer (suppressed next occurrences)",
+                    )
                     continue
 
                 ar = self.active
                 if not ar:
-                    await consumer.commit()
+                    await self._commit_with_warn(
+                        consumer,
+                        code="worker.commit.signals",
+                        msg="Kafka commit failed in signals consumer (suppressed next occurrences)",
+                    )
                     continue
 
                 if ar.task_id == env.task_id and ar.node_id == env.node_id and ar.attempt_epoch == env.attempt_epoch:
@@ -823,16 +954,28 @@ class Worker:
                     self._cancel_flag.set()
                     ar.state = "cancelling"
                     await self.state.write_active(ar)
-                await consumer.commit()
+                await self._commit_with_warn(
+                    consumer,
+                    code="worker.commit.signals",
+                    msg="Kafka commit failed in signals consumer (suppressed next occurrences)",
+                )
         except asyncio.CancelledError:
             return
+        except Exception:
+            self.log.error("worker.signals.loop.crashed", event="worker.signals.loop.crashed", exc_info=True)
 
     # ---------- DB cancel watcher (failsafe) ----------
     async def _db_cancel_watch_loop(self) -> None:
         try:
             while self._busy and not self._stopping and self.active is not None and not self._cancel_flag.is_set():
                 ar = self.active
-                try:
+                with swallow(
+                    logger=self.log,
+                    code="worker.db_cancel_watch",
+                    msg="db cancel watch iteration failed",
+                    level=logging.WARNING,
+                    expected=True,
+                ):
                     doc = await self.db.tasks.find_one({"id": ar.task_id}, {"id": 1, "coordinator": 1, "graph": 1})
                     if doc:
                         if (doc.get("coordinator") or {}).get("cancelled") is True:
@@ -849,31 +992,54 @@ class Worker:
                                         self._cancel_meta["reason"] = "db_flag"
                                     self._cancel_flag.set()
                                 break
-                except Exception:
-                    pass
                 await self.clock.sleep_ms(self.cfg.db_cancel_poll_ms)
         except asyncio.CancelledError:
             return
 
     # ---------- DB indexes ----------
     async def _ensure_indexes(self) -> None:
-        try:
+        with swallow(
+            logger=self.log,
+            code="worker.idx.artifacts1",
+            msg="create index artifacts (task,node) failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.artifacts.create_index([("task_id", 1), ("node_id", 1)], name="ix_artifacts_task_node")
+        with swallow(
+            logger=self.log,
+            code="worker.idx.artifacts2",
+            msg="create index artifacts batch failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.artifacts.create_index(
                 [("task_id", 1), ("node_id", 1), ("batch_uid", 1)],
                 unique=True,
                 sparse=True,
                 name="uniq_artifact_batch_uid",
             )
+        with swallow(
+            logger=self.log,
+            code="worker.idx.stream_progress",
+            msg="create index stream_progress failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.stream_progress.create_index(
                 [("task_id", 1), ("consumer_node", 1), ("from_node", 1), ("batch_uid", 1)],
                 unique=True,
                 name="uniq_stream_claim_batch",
             )
+        with swallow(
+            logger=self.log,
+            code="worker.idx.worker_state",
+            msg="create index worker_state ttl failed",
+            level=logging.WARNING,
+            expected=True,
+        ):
             await self.db.worker_state.create_index(
                 [("updated_at", 1)],
                 expireAfterSeconds=7 * 24 * 3600,
                 name="ttl_worker_state_updated_at",
             )
-        except Exception:
-            pass

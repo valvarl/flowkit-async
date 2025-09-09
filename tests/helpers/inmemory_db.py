@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from .util import dbg
+from flowkit.core.log import get_logger
+
+LOG_DB = get_logger("tests.db.inmem")
 
 
 def _now_dt():
@@ -384,15 +388,29 @@ class InMemCollection:
             for k, v in (upd["$setOnInsert"] or {}).items():
                 _set_path(out, k, v)
             if self.name == "artifacts" and "status" in (upd["$setOnInsert"] or {}):
-                dbg("DB.ARTIFACTS.STATUS", filter={}, new_status=str(upd["$setOnInsert"]["status"]))
+                LOG_DB.debug(
+                    "db.artifacts.status",
+                    event="db.artifacts.status",
+                    op="setOnInsert",
+                    new_status=str(upd["$setOnInsert"]["status"]),
+                )
 
         if "$set" in upd:
             if self.name == "tasks":
                 for k, v in (upd["$set"] or {}).items():
                     if k == "graph.nodes.$.status":
-                        dbg("DB.TASK.STATUS", filter={}, new_status=str(v))
+                        LOG_DB.debug(
+                            "db.tasks.node_status",
+                            event="db.tasks.node_status",
+                            new_status=str(v),
+                        )
             if self.name == "artifacts" and "status" in (upd["$set"] or {}):
-                dbg("DB.ARTIFACTS.STATUS", filter={}, new_status=str(upd["$set"]["status"]))
+                LOG_DB.debug(
+                    "db.artifacts.status",
+                    event="db.artifacts.status",
+                    op="set",
+                    new_status=str(upd["$set"]["status"]),
+                )
             for k, v in (upd["$set"] or {}).items():
                 _set_path(out, k, v)
 
@@ -417,7 +435,12 @@ class InMemCollection:
         self._ensure_unique_ok(cand)
         self.rows.append(cand)
         if self.name == "outbox":
-            dbg("DB.OUTBOX.INSERT", size=len(self.rows), doc_keys=list(doc.keys()))
+            LOG_DB.debug(
+                "db.outbox.insert",
+                event="db.outbox.insert",
+                size=len(self.rows),
+                doc_keys=list(doc.keys()),
+            )
 
     async def find_one(self, flt, proj=None):
         for d in self.rows:
