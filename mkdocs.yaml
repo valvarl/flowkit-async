@@ -75,6 +75,9 @@ nav:
 
 plugins:
   - search
+  - gen-files:
+      scripts:
+        - docs/_scripts/gen_tests_doc.py
   - mkdocstrings:
       handlers:
         python:
