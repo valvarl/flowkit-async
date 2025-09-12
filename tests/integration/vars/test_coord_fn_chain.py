@@ -110,5 +110,5 @@ async def test_coord_fn_chain_set_merge_incr_unset(inmemory_db, sla, max_batches
 
     ups = [u for u in updated if u is not None]
     if len(ups) >= 2:
-        for prev, cur in itertools.pairwise(ups, ups[1:], strict=False):
+        for prev, cur in itertools.pairwise(ups):
             assert cur > prev, f"updated_at must increase: {prev!r} → {cur!r}"
