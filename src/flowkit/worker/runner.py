@@ -457,8 +457,16 @@ class Worker:
 
     # ---------- Handler execution ----------
     async def _run_handler(self, role: str, start_env: Envelope, cmd: CmdTaskStart) -> None:
+        """
+        Execute the role handler with strict adapter precedence:
+        1) If the Coordinator provided `input_inline.input_adapter`, the worker MUST use it.
+           If the adapter is unknown, fail the task (permanent) to avoid silently misrouting data.
+        2) Otherwise, if the handler provided a known adapter, use it.
+        3) Otherwise, fallback to `handler.iter_batches(loaded)`.
+        """
         if self.active is None:
             raise RuntimeError("No active run")
+
         handler = self.handlers.get(role)
         if not handler:
             await self._emit_task_failed(role, start_env, "no_handler", True, "handler not registered")
@@ -467,6 +475,7 @@ class Worker:
 
         ctx: RunContext | None = None
         try:
+            # --- init handler & context ---
             await handler.init(
                 {
                     "task_id": self.active.task_id,
@@ -497,15 +506,59 @@ class Worker:
 
             loaded = await handler.load_input(cmd.input_ref, cmd.input_inline)
 
-            # Choose input adapter if requested
-            adapter_name = None
-            adapter_args: dict[str, Any] = {}
-            if isinstance(loaded, dict):
-                inline = loaded.get("input_inline") or {}
-                adapter_name = inline.get("input_adapter")
-                adapter_args = inline.get("input_args", {}) or {}
+            # --- adapter selection (strict cmd precedence) ---
+            cmd_inline = cmd.input_inline or {}
+            handler_inline = loaded.get("input_inline") if isinstance(loaded, dict) else None
 
-            if adapter_name and adapter_name in self.input_adapters:
+            cmd_adapter = (cmd_inline or {}).get("input_adapter")
+            handler_adapter = (handler_inline or {}).get("input_adapter") if isinstance(handler_inline, dict) else None
+
+            adapter_name: str | None = None
+            adapter_args: dict[str, Any] = {}
+            io_source = "none"
+
+            # 1) Coordinator-specified adapter (mandatory if present).
+            if cmd_adapter:
+                if cmd_adapter not in self.input_adapters:
+                    self.log.error(
+                        "worker.adapter.unknown_from_cmd",
+                        event="worker.adapter.unknown_from_cmd",
+                        node_id=self.active.node_id,
+                        adapter=cmd_adapter,
+                    )
+                    await self._emit_task_failed(
+                        role,
+                        start_env,
+                        "bad_input_adapter",
+                        True,
+                        f"unknown input_adapter '{cmd_adapter}'",
+                    )
+                    return
+                adapter_name = cmd_adapter
+                adapter_args = cmd_inline.get("input_args") or {}
+                io_source = "cmd"
+
+                # Handler tried to propose a different route: ignore it, keep a debug trace.
+                if handler_adapter and handler_adapter != cmd_adapter:
+                    self.log.debug(
+                        "worker.adapter.handler_conflict_ignored",
+                        event="worker.adapter.handler_conflict_ignored",
+                        node_id=self.active.node_id,
+                        handler_adapter=handler_adapter,
+                        cmd_adapter=cmd_adapter,
+                    )
+
+            # 2) Otherwise use handler-provided adapter if known.
+            elif handler_adapter and handler_adapter in self.input_adapters:
+                adapter_name = handler_adapter
+                adapter_args = (handler_inline.get("input_args") or {}) if isinstance(handler_inline, dict) else {}
+                io_source = "handler"
+
+            # 3) Otherwise no adapter → fallback to iter_batches(loaded).
+
+            # --- build batch iterator ---
+            if adapter_name:
+                # pull routing fields out of args
                 from_nodes = (
                     adapter_args.get("from_nodes")
                     or (adapter_args.get("from_node") and [adapter_args["from_node"]])
@@ -525,6 +578,7 @@ class Worker:
                     adapter=adapter_name,
                     from_nodes=from_nodes,
                     adapter_kwargs=adapter_kwargs,
+                    io_source=io_source,
                 )
 
                 async def _iter_batches_adapter():
@@ -536,15 +590,13 @@ class Worker:
                         **adapter_kwargs,
                     )
                     async for b in it:
-                        if isinstance(b.payload, dict):
-                            _cnt = len(b.payload.get("items") or b.payload.get("skus") or [])
-                            self.log.debug(
-                                "worker.adapter.batch",
-                                event="worker.adapter.batch",
-                                node_id=self.active.node_id,
-                                batch_uid=b.batch_uid,
-                                items=_cnt,
-                            )
+                        # Avoid product-specific assumptions; log only generic info.
+                        self.log.debug(
+                            "worker.adapter.batch",
+                            event="worker.adapter.batch",
+                            node_id=self.active.node_id,
+                            batch_uid=b.batch_uid,
+                        )
                         yield b
 
                 batch_iter = _iter_batches_adapter()
@@ -553,9 +605,11 @@ class Worker:
                     "worker.handler.iter_batches_fallback",
                     event="worker.handler.iter_batches_fallback",
                     node_id=self.active.node_id,
+                    io_source="handler",
                 )
                 batch_iter = handler.iter_batches(loaded)
 
+            # --- streaming loop ---
             self._spawn(self._db_cancel_watch_loop())
             async for batch in batch_iter:
                 if self._cancel_flag.is_set():
@@ -568,7 +622,13 @@ class Worker:
                     raise
                 except Exception as e:
                     reason, permanent = handler.classify_error(e)
-                    res = BatchResult(success=False, reason_code=reason, permanent=permanent, error=str(e), metrics={})
+                    res = BatchResult(
+                        success=False,
+                        reason_code=reason,
+                        permanent=permanent,
+                        error=str(e),
+                        metrics={},
+                    )
 
                 if res.success:
                     artifacts_ref = res.artifacts_ref

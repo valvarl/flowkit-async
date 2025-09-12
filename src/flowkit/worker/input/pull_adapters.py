@@ -184,13 +184,9 @@ class PullAdapters:
                 parent_uid = b.batch_uid or stable_hash({"payload": b.payload})
                 meta = (b.payload or {}).get("meta") or {}
 
-                key = meta_list_key
-                if key is None:
-                    for cand in ("items", "skus", "enriched", "ocr"):
-                        if isinstance(meta.get(cand), list):
-                            key = cand
-                            break
-                items = meta.get(key) if key else None
+                items = None
+                if meta_list_key is not None and isinstance(meta.get(meta_list_key), list):
+                    items = meta.get(meta_list_key)
                 if not isinstance(items, list):
                     items = [meta]
 
@@ -203,7 +199,7 @@ class PullAdapters:
                         payload={
                             "from_node": src,
                             "items": chunk,
-                            "parent": {"ref": {"batch_uid": parent_uid}, "list_key": key},
+                            "parent": {"ref": {"batch_uid": parent_uid}, "list_key": meta_list_key},
                         },
                     )
                     idx += 1

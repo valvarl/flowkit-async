@@ -33,9 +33,23 @@ class RoleHandler:
         pass
 
     async def load_input(self, input_ref: dict[str, Any] | None, input_inline: dict[str, Any] | None) -> Any:
+        """
+        Return any structure needed later by `iter_batches`.
+
+        Important: if the Coordinator specifies `input_inline.input_adapter`,
+        the worker selects and runs that adapter. Data returned from
+        `load_input` must not override the explicitly requested adapter or
+        its arguments.
+        """
         return {"input_ref": input_ref or {}, "input_inline": input_inline or {}}
 
     async def iter_batches(self, loaded: Any) -> AsyncIterator[Batch]:
+        """
+        Yield batches from the input when no adapter is selected.
+
+        If an adapter is specified by the Coordinator, the worker will not call
+        `iter_batches` and will stream via the selected pull adapter instead.
+        """
         yield Batch(batch_uid=None, payload=loaded or {})
 
     async def process_batch(self, batch: Batch, ctx) -> BatchResult:
