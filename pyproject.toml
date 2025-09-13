@@ -67,6 +67,7 @@ markers = [
   "use_outbox: enable real Outbox dispatcher (no bypass)",
   "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test",
   "adapters: input adapters & routing tests (orchestrator-first contract)",
+  "streaming: streaming fan-in/fan-out and metrics tests",
   "vars: vars/graph adapter tests and helpers",
 ]
 
