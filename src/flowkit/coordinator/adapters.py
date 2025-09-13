@@ -353,6 +353,37 @@ class CoordinatorAdapters:
         self.log.info("vars.incr", event="coord.vars.incr", task_id=task_id, key=path, by=by)
         return {"ok": True, "key": key, "by": by}
 
+    def _collect_empty_paths(self, subtree: Any, *, prefix: str) -> tuple[list[str], bool]:
+        """
+        Recursively collect dotted paths (under `prefix`) that are empty dict subtrees.
+        Returns (paths_to_unset, is_empty_after_pruning).
+
+        Semantics:
+          - Non-dict leaves make the subtree non-empty.
+          - Dict children that become empty after pruning are scheduled for $unset.
+          - A dict with no remaining non-empty children is considered empty itself.
+        """
+        if not isinstance(subtree, dict):
+            return ([], False)
+
+        paths_to_unset: list[str] = []
+        non_empty_children = 0
+
+        for k, v in subtree.items():
+            child_prefix = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                child_unsets, child_empty = self._collect_empty_paths(v, prefix=child_prefix)
+                paths_to_unset.extend(child_unsets)
+                if child_empty:
+                    # The whole child subtree is empty → remove this field.
+                    paths_to_unset.append(child_prefix)
+                else:
+                    non_empty_children += 1
+            else:
+                non_empty_children += 1
+
+        return (paths_to_unset, non_empty_children == 0)
+
     async def vars_unset(
         self,
         task_id: str,
@@ -403,6 +434,29 @@ class CoordinatorAdapters:
             keys=sorted(unset_doc.keys()),
             n=len(unset_doc),
         )
+
+        # Second pass: prune empty parent objects that may remain after the unset.
+        try:
+            doc_after = await self.db.tasks.find_one({"id": task_id}, {"coordinator": 1})
+        except Exception:
+            doc_after = None
+
+        vars_tree = (((doc_after or {}).get("coordinator") or {}).get("vars")) or {}
+        if isinstance(vars_tree, dict):
+            prune_paths, _ = self._collect_empty_paths(vars_tree, prefix="coordinator.vars")
+            if prune_paths:
+                # Issue a single $unset for all empty subtrees.
+                await self.db.tasks.update_one(
+                    {"id": task_id},
+                    {"$unset": {p: True for p in prune_paths}, "$currentDate": {"updated_at": True}},
+                )
+                self.log.info(
+                    "vars.unset.prune",
+                    event="coord.vars.unset.prune",
+                    task_id=task_id,
+                    keys=sorted(prune_paths),
+                    n=len(prune_paths),
+                )
         return {"ok": True, "touched": len(unset_doc)}
 
     async def merge_generic(self, task_id: str, from_nodes: list[str], target: dict[str, Any]) -> dict[str, Any]:
