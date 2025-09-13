@@ -10,13 +10,7 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from ..core.config import WorkerConfig
-from ..core.log import (
-    bind_context,
-    get_logger,
-    log_context,
-    swallow,
-    warn_once,
-)
+from ..core.log import bind_context, get_logger, log_context, swallow, warn_once
 from ..core.time import Clock, SystemClock
 from ..core.utils import dumps, loads, stable_hash
 from ..protocol.messages import (
@@ -558,19 +552,54 @@ class Worker:
 
             # --- build batch iterator ---
             if adapter_name:
-                # pull routing fields out of args
-                from_nodes = (
-                    adapter_args.get("from_nodes")
-                    or (adapter_args.get("from_node") and [adapter_args["from_node"]])
-                    or []
-                )
-                adapter_kwargs = dict(adapter_args)
-                adapter_kwargs.pop("from_nodes", None)
-                adapter_kwargs.pop("from_node", None)
-                adapter_kwargs.setdefault("poll_ms", self.cfg.pull_poll_ms_default)
-                adapter_kwargs.setdefault("eof_on_task_done", True)
-                adapter_kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
+                # ---- validate and normalize adapter args BEFORE starting streaming ----
+                def _normalize_aliases(args: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+                    from_nodes = args.get("from_nodes") or ([args["from_node"]] if args.get("from_node") else [])
+                    kwargs = dict(args)
+                    kwargs.pop("from_nodes", None)
+                    kwargs.pop("from_node", None)
+                    kwargs.setdefault("poll_ms", self.cfg.pull_poll_ms_default)
+                    kwargs.setdefault("eof_on_task_done", True)
+                    kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
+                    return from_nodes, kwargs
 
+                def _validate_adapter_args(name: str, args: dict[str, Any]) -> tuple[bool, str | None]:
+                    if name == "pull.from_artifacts":
+                        return True, None
+                    if name == "pull.from_artifacts.rechunk:size":
+                        if not isinstance(args.get("size"), int) or args["size"] <= 0:
+                            return False, "missing or invalid 'size' (positive int required)"
+                        mlk = args.get("meta_list_key", None)
+                        if mlk is not None and not isinstance(mlk, str):
+                            return False, "'meta_list_key' must be a string if provided"
+                        # strict mode: require meta_list_key
+                        if self.cfg.strict_input_adapters and not isinstance(mlk, str):
+                            return False, "strict mode: 'meta_list_key' is required and must be a string"
+                        return True, None
+                    return False, f"unknown adapter '{name}'"
+
+                # normalize first
+                from_nodes, adapter_kwargs = _normalize_aliases(adapter_args)
+                ok, why = _validate_adapter_args(adapter_name, {**adapter_kwargs, "from_nodes": from_nodes})
+                if not ok:
+                    self.log.error(
+                        "worker.adapter.validation_failed",
+                        event="worker.adapter.validation_failed",
+                        node_id=self.active.node_id,
+                        adapter=adapter_name,
+                        io_source=io_source,
+                        reason=why,
+                    )
+                    await self._emit_task_failed(
+                        role,
+                        start_env,
+                        "bad_input_args",
+                        True,
+                        why,
+                    )
+                    return
+
+                # pull routing fields out of args
                 self.log.debug(
                     "worker.adapter.selected",
                     event="worker.adapter.selected",
@@ -579,6 +608,13 @@ class Worker:
                     from_nodes=from_nodes,
                     adapter_kwargs=adapter_kwargs,
                     io_source=io_source,
+                )
+                self.log.debug(
+                    "worker.adapter.validation",
+                    event="worker.adapter.validation",
+                    node_id=self.active.node_id,
+                    adapter=adapter_name,
+                    validation_status="ok",
                 )
 
                 async def _iter_batches_adapter():
@@ -611,7 +647,9 @@ class Worker:
 
             # --- streaming loop ---
             self._spawn(self._db_cancel_watch_loop())
+            had_batches = False
             async for batch in batch_iter:
+                had_batches = True
                 if self._cancel_flag.is_set():
                     raise asyncio.CancelledError()
 
@@ -653,6 +691,13 @@ class Worker:
                     role, start_env, res.reason_code or "error", bool(res.permanent), res.error
                 )
                 return
+
+            self.log.debug(
+                "worker.upstream.status",
+                event="worker.upstream.status",
+                node_id=self.active.node_id,
+                upstream_empty=(not had_batches),
+            )
 
             fin = await handler.finalize(ctx)
             metrics = (fin.metrics if fin else {}) if fin else {}

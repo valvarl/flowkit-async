@@ -60,4 +60,7 @@ class RoleHandler:
         return FinalizeResult(metrics={})
 
     def classify_error(self, exc: BaseException) -> tuple[str, bool]:
+        # Treat config/programming faults as permanent by default to avoid infinite retries.
+        if isinstance(exc, TypeError | ValueError | KeyError):
+            return ("unexpected_error", True)
         return ("unexpected_error", False)

@@ -11,6 +11,7 @@
   "roles": ["echo"],
   "worker_id": null,
   "worker_version": "2.0.0",
+  "strict_input_adapters": false,
 
   "lease_ttl_sec": 60,
   "hb_interval_sec": 20,
