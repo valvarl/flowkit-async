@@ -381,6 +381,53 @@ class InMemCollection:
                             cur[p] = [] if next_is_index else {}
                         cur = cur[p]
 
+        def _unset_path(m: dict[str, Any], path: str):
+            """
+            Unset a nested field. Mongo semantics:
+              - For dicts: remove the key if present.
+              - For lists: set the element to None (do not shift indexes).
+            Missing intermediates are a no-op.
+            """
+            parts = path.split(".")
+            cur: Any = m
+            for i in range(len(parts)):
+                p = _resolve(parts[i])
+                last = i == len(parts) - 1
+
+                # List handling
+                if isinstance(cur, list):
+                    if not p.isdigit():
+                        # Non-numeric on a list path → treat as missing (no-op)
+                        return
+                    idx = int(p)
+                    if idx >= len(cur):
+                        return  # out of bounds → no-op
+                    if last:
+                        # Mongo sets array element to null on $unset
+                        cur[idx] = None
+                        return
+                    nxt = cur[idx]
+                    if not isinstance(nxt, dict | list):
+                        return  # can't go deeper
+                    cur = nxt
+                    continue
+
+                # Dict handling
+                if isinstance(cur, dict):
+                    if last:
+                        cur.pop(p, None)
+                        return
+                    if p not in cur:
+                        return  # missing intermediate → no-op
+                    nxt = cur[p]
+                    if not isinstance(nxt, dict | list):
+                        return
+                    cur = nxt
+                    continue
+
+                # Unsupported container → no-op
+                return
+
         # Apply operators to a copy
         out = {} if created else {**base}
 
@@ -413,6 +460,12 @@ class InMemCollection:
                 )
             for k, v in (upd["$set"] or {}).items():
                 _set_path(out, k, v)
+
+        if "$unset" in upd:
+            # value part for $unset is ignored (Mongo accepts any value)
+            for k in (upd["$unset"] or {}).keys():
+                _unset_path(out, k)
+            # (optional) no special logging needed here
 
         if "$inc" in upd:
             for k, v in (upd["$inc"] or {}).items():

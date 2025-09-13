@@ -64,14 +64,20 @@ graph = {
 
 ## Key Concepts
 
+### Orchestrator-first contract
+
+For input routing, the Coordinator is the single source of truth. If `cmd.input_inline.input_adapter` is present, the worker must use it. Otherwise, it may use a handler-suggested adapter or fall back to `iter_batches`.
+
+This eliminates ambiguity and makes runs reproducible.
+
 ### Handlers
 
 **Handlers** define the actual processing logic for each task type:
 
 ```python
-from flowkit.worker.handlers.base import Handler, Batch, BatchResult
+from flowkit.worker.handlers.base import RoleHandler, Batch, BatchResult, FinalizeResult
 
-class MyHandler(Handler):
+class MyHandler(RoleHandler):
     async def iter_batches(self, input_data) -> AsyncIterator[Batch]:
         # Generate batches from input
         for item in input_data:
@@ -82,9 +88,9 @@ class MyHandler(Handler):
         result = process_data(batch.payload)
         return BatchResult(success=True, artifacts_ref=result)
 
-    async def finalize(self, ctx: RunContext) -> FinalizationResult:
+    async def finalize(self, ctx: RunContext) -> FinalizeResult:
         # Clean up after all batches processed
-        return FinalizationResult(metrics={"total_processed": ctx.processed_count})
+        return FinalizeResult(metrics={"total_processed": ctx.processed_count})
 ```
 
 ### Artifacts
@@ -100,19 +106,37 @@ class MyHandler(Handler):
 
 **Input Adapters** define how data flows between stages:
 
-```python
-# Pull from upstream artifacts
-"input_inline": {
+```json
+{
+    "input_inline": {
     "input_adapter": "pull.from_artifacts",
     "input_args": {"from_nodes": ["upstream_node"]}
-}
-
-# Rechunk data with different batch sizes
-"input_inline": {
-    "input_adapter": "pull.from_artifacts.rechunk:size",
-    "input_args": {"from_nodes": ["upstream"], "size": 10}
+    }
 }
 ```
+
+```json
+{
+    "input_inline": {
+    "input_adapter": "pull.from_artifacts.rechunk:size",
+    "input_args": {"from_nodes": ["upstream"], "size": 10}
+    }
+}
+```
+
+Deterministic rechunking
+
+- If `meta_list_key` is provided and `meta[meta_list_key]` is a list → chunk that list to `size`.
+- Otherwise, each artifact meta is treated as one logical item (`items=[meta]`).
+- No heuristics over domain keys (no `skus|items|…` guessing).
+
+Aliases
+
+- `from_node` (single) is accepted and normalized to `from_nodes=[...]`.
+
+Empty upstream
+
+Valid routes with no data complete normally (`count=0`).
 
 ### Task States
 
@@ -135,9 +159,9 @@ Control when a node starts based on dependencies:
 {
     "node_id": "combiner",
     "depends_on": ["node1", "node2", "node3"],
-    "fan_in": "all"        # Wait for all dependencies (default)
-    # "fan_in": "any"      # Start when any dependency completes
-    # "fan_in": "count:2"  # Start when 2 dependencies complete
+    "fan_in": "all"
+    # "fan_in": "any"
+    # "fan_in": "count:2"
 }
 ```
 
@@ -201,6 +225,9 @@ def classify_error(self, error: Exception) -> tuple[str, bool]:
     else:
         return "temporary_failure", False  # Transient - retry
 ```
+
+Worker core also normalizes common configuration errors:
+- unknown adapter → `bad_input_adapter` (permanent), bad/missing args → `bad_input_args` (permanent).
 
 ## Message Flow
 

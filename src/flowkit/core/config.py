@@ -131,6 +131,10 @@ class WorkerConfig:
     db_cancel_poll_ms: int = 500
 
     # ---- derived (computed in post_init) ----
+    # Input adapters policy
+    # When True, certain adapters (e.g., pull.from_artifacts.rechunk:size) must receive
+    # explicit arguments such as `meta_list_key`, otherwise worker fails early with bad_input_args.
+    strict_input_adapters: bool = False
     lease_ttl_ms: int = 60_000
     hb_interval_ms: int = 20_000
     announce_interval_ms: int = 60_000

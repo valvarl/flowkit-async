@@ -55,6 +55,7 @@ class Coordinator:
         worker_types: list[str] | None = None,
         clock: Clock | None = None,
         adapters: dict[str, Any] | None = None,
+        sensitive_detector: Any | None = None,
     ) -> None:
         self.db = db
         self.cfg = copy.deepcopy(cfg) if cfg is not None else CoordinatorConfig.load()
@@ -64,7 +65,7 @@ class Coordinator:
         self.clock: Clock = clock or SystemClock()
         self.bus = KafkaBus(self.cfg)
         self.outbox = OutboxDispatcher(db=db, bus=self.bus, cfg=self.cfg, clock=self.clock)
-        self.adapters = adapters or dict(default_adapters(db=db, clock=self.clock))
+        self.adapters = adapters or dict(default_adapters(db=db, clock=self.clock, detector=sensitive_detector))
 
         self._tasks: set[asyncio.Task] = set()
         self._running = False
