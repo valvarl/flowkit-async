@@ -209,7 +209,7 @@ class PullAdapters:
                         payload={
                             "from_node": src,
                             "items": chunk,
-                            "parent": {"ref": {"batch_uid": parent_uid}, "list_key": chosen_key},
+                            "parent": {"ref": {"batch_uid": parent_uid}, "meta_list_key": chosen_key},
                         },
                     )
                     idx += 1

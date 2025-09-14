@@ -10,7 +10,7 @@ from flowkit.core.log import log_context
 
 from ._helpers import _get_count, _make_indexer, _node_status
 
-pytestmark = [pytest.mark.streaming, pytest.mark.worker_types("indexer,enricher,ocr,analyzer")]
+pytestmark = [pytest.mark.streaming, pytest.mark.worker_types("indexer,analyzer")]
 
 
 @pytest.mark.asyncio

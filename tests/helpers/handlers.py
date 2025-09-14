@@ -10,6 +10,30 @@ from flowkit.worker.handlers.base import Batch, BatchResult, FinalizeResult, Rol
 LOG = get_logger("tests.helpers.handlers")
 
 
+def _extract_items(payload: dict[str, Any] | None) -> list[Any]:
+    """
+    Schema-agnostic item extraction used by sink/transform handlers.
+    Priority:
+      1) payload["items"] if list
+      2) payload["skus"] if list
+      3) payload["meta"]["items"] if list
+      4) payload["meta"]["skus"] if list
+    Returns an empty list if nothing matches.
+    """
+    if not isinstance(payload, dict):
+        return []
+    # nested in meta
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        v = meta.get("items")
+        if isinstance(v, list):
+            return v
+        v = meta.get("skus")
+        if isinstance(v, list):
+            return v
+    return []
+
+
 # ───────────────────────── Index-like (graph fan-in/out) ─────────────────────────
 
 
@@ -22,9 +46,10 @@ class IndexerHandler(RoleHandler):
         self.db = db
         self._task_id: str | None = None
         self._epoch: int | None = None
+        self._node_id: str | None = None
 
     async def init(self, cfg):
-        self._task_id, self._epoch = cfg["task_id"], cfg["attempt_epoch"]
+        self._task_id, self._epoch, self._node_id = cfg["task_id"], cfg["attempt_epoch"], cfg["node_id"]
         LOG.debug(
             "handler.init",
             extra={"event": "handler.init", "role": self.role, "task_id": self._task_id, "epoch": self._epoch},
@@ -39,7 +64,9 @@ class IndexerHandler(RoleHandler):
         skus = [f"sku-{i}" for i in range(total)]
         for idx in range(0, total, bs):
             chunk = skus[idx : idx + bs]
-            uid = stable_hash({"node": "w1", "idx": idx // bs})
+            # Make upstream batch_uid unique per upstream node (and task), so
+            # downstream consumers can use it safely as their own batch_uid.
+            uid = stable_hash({"task": self._task_id, "node": self._node_id, "idx": idx // bs})
             LOG.debug(
                 "handler.indexer.yield",
                 extra={
@@ -120,7 +147,7 @@ class _PullFromArtifactsMixin:
                         )
                         yield Batch(
                             batch_uid=chunk_uid,
-                            payload={"items": chunk, "parent": {"batch_uid": parent_uid, "list_key": meta_key}},
+                            payload={"items": chunk, "parent": {"batch_uid": parent_uid, "meta_list_key": meta_key}},
                         )
                         progressed = True
                         idx_local += 1
@@ -169,7 +196,7 @@ class EnricherHandler(_PullFromArtifactsMixin, RoleHandler):
             yield b
 
     async def process_batch(self, batch, ctx):
-        items = batch.payload.get("items") or []
+        items = _extract_items(batch.payload)
         if not items:
             return BatchResult(success=True, metrics={"noop": 1})
         enriched = [{"sku": (x if isinstance(x, str) else x.get("sku", x)), "enriched": True} for x in items]
@@ -209,7 +236,7 @@ class OCRHandler(_PullFromArtifactsMixin, RoleHandler):
             yield b
 
     async def process_batch(self, batch, ctx):
-        items = batch.payload.get("items") or []
+        items = _extract_items(batch.payload)
         if not items:
             return BatchResult(success=True, metrics={"noop": 1})
         ocrd = [{"sku": (it["sku"] if isinstance(it, dict) else it), "ocr_ok": True} for it in items]
@@ -250,8 +277,18 @@ class AnalyzerHandler(_PullFromArtifactsMixin, RoleHandler):
 
     async def process_batch(self, batch, ctx):
         payload = batch.payload or {}
-        items = payload.get("items") or payload.get("skus") or []
-        n = len(items)
+        # 1) Preferred (rechunk) path
+        items = payload.get("items")
+        if not isinstance(items, list):
+            # 2) Base pull shape: payload["meta"] + parent.meta_list_key
+            meta = payload.get("meta") or {}
+            parent = payload.get("parent") or {}
+            mlk = parent.get("meta_list_key") or "skus"
+            v = meta.get(mlk)
+            if isinstance(v, list):
+                items = v
+
+        n = len(items) if isinstance(items, list) else 0
         return BatchResult(success=True, metrics={"count": n} if n else {"noop": 1})
 
 

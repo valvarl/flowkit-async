@@ -25,6 +25,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "use_handlers(names): restrict which test handlers to instantiate")
     config.addinivalue_line("markers", "use_outbox: enable real Outbox dispatcher (no bypass)")
     config.addinivalue_line("markers", "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test")
+    config.addinivalue_line("markers", "integration: integration tests")
+    config.addinivalue_line("markers", "unit: unit tests")
+    config.addinivalue_line("markers", "adapters: input adapters & routing tests (orchestrator-first contract)")
+    config.addinivalue_line("markers", "streaming: streaming fan-in/fan-out and metrics tests")
+    config.addinivalue_line("markers", "vars: variable-processing tests")
 
 
 def pytest_addoption(parser):

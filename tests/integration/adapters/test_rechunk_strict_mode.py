@@ -4,39 +4,27 @@ import pytest
 from tests.helpers.graph import make_graph, prime_graph, wait_task_finished, wait_task_status
 from tests.helpers.handlers import build_indexer_handler
 
-from flowkit.core.config import WorkerConfig
 from flowkit.protocol.messages import RunState
+from flowkit.worker.handlers.base import Batch, BatchResult, RoleHandler
 
 pytestmark = [pytest.mark.integration, pytest.mark.adapters, pytest.mark.worker_types("indexer,probe")]
 
 
 @pytest.mark.asyncio
-async def test_rechunk_requires_meta_key_in_strict_mode(
-    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
-):
+@pytest.mark.cfg(worker={"strict_input_adapters": True})
+async def test_rechunk_requires_meta_key_in_strict_mode(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     """
     In strict mode, rechunk without meta_list_key must fail early.
     """
     cd, _ = env_and_imports
 
-    # Patch WorkerConfig.load to enable strict mode for this test
-    orig_load = WorkerConfig.load
-
-    def strict_load(path: str = "configs/worker.default.json", overrides=None):
-        cfg = orig_load(path, overrides=overrides)
-        cfg.strict_input_adapters = True
-        return cfg
-
-    monkeypatch.setattr("flowkit.core.config.WorkerConfig.load", strict_load, raising=True)
+    class ProbeNoop(RoleHandler):
+        role = "probe"
 
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),
-        (
-            "probe",
-            __import__("flowkit.worker.handlers.base", fromlist=["RoleHandler"]).worker.handlers.base.RoleHandler(),
-        ),
+        ("probe", ProbeNoop()),
     )
-    # ↑ probe handler не важен, адаптер отвалится до стриминга; но worker_factory требует пару
 
     u = {
         "node_id": "u",
@@ -68,20 +56,9 @@ async def test_rechunk_requires_meta_key_in_strict_mode(
 
 
 @pytest.mark.asyncio
-async def test_rechunk_with_meta_key_passes_in_strict_mode(
-    env_and_imports, inmemory_db, coord, worker_factory, monkeypatch, tlog
-):
+@pytest.mark.cfg(worker={"strict_input_adapters": True})
+async def test_rechunk_with_meta_key_passes_in_strict_mode(env_and_imports, inmemory_db, coord, worker_factory, tlog):
     cd, _ = env_and_imports
-    orig_load = WorkerConfig.load
-
-    def strict_load(path: str = "configs/worker.default.json", overrides=None):
-        cfg = orig_load(path, overrides=overrides)
-        cfg.strict_input_adapters = True
-        return cfg
-
-    monkeypatch.setattr("flowkit.core.config.WorkerConfig.load", strict_load, raising=True)
-
-    from flowkit.worker.handlers.base import Batch, BatchResult, RoleHandler
 
     class ProbeCounts(RoleHandler):
         role = "probe"
