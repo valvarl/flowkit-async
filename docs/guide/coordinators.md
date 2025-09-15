@@ -215,17 +215,142 @@ Coordinators can execute logic directly without workers:
         "fn": "merge.generic",
         "fn_args": {
             "from_nodes": ["extract1", "extract2"],
-            "target": {"key": "merged_data"}
+            "target": {"node_id": "merger"}
         }
     }
 }
 ```
 
-Built-in coordinator functions:
+Built-in coordinator functions include (non-exhaustive):
 
-- `merge.generic`: Merge artifacts from multiple nodes
-- `copy.artifacts`: Copy artifacts between nodes
-- `transform.metadata`: Transform artifact metadata
+- `vars.set` — set multiple keys under `coordinator.vars` atomically
+- `vars.merge` — deep-merge dictionaries into `coordinator.vars`
+- `vars.incr` — atomically increment a numeric leaf under `coordinator.vars`
+- `vars.unset` — remove one or more keys and prune empty subtrees
+- `merge.generic` — merge artifacts from multiple nodes and mark a target artifact complete
+- `metrics.aggregate` — aggregate raw metrics and store them on a node
+- `noop` — no-op (useful in tests)
+
+See **Task Variables** below for full usage and guardrails.
+
+## Task Variables (`coordinator.vars`)
+
+A **task-scoped key–value store** lives at `tasks.coordinator.vars`. It allows lightweight, durable state that later coordinator decisions (or coordinator functions) can read and update without changing workers.
+
+### Why it’s useful
+
+- Record thresholds, counters, feature flags, SLA knobs
+- Let a coordinator function make **data-driven** choices (e.g., skip an expensive branch if `vars.qps < 10`)
+- Keep routing state in the task document instead of pushing it into workers
+
+### Adapters
+
+All adapters are available as coordinator functions (see examples). They are **idempotent** and rely on MongoDB atomic operators.
+
+#### `vars.set(task_id: str, **kv) -> dict`
+
+- Accepts dotted keys or nested dicts:
+  ```python
+  # dotted + nested in the same call
+  {"kv": {"plain": 7, "sla.max_delay": 500, "flags": {"ab": True}}}
+  ```
+- Optional `block_sensitive=True` (either top-level kwarg or inside `kv`) rejects suspicious values (see *Sensitive value detection*).
+- Performs a single atomic `$set` across all paths.
+- Returns: `{"ok": True, "touched": N}`
+
+#### `vars.merge(task_id: str, **kv) -> dict`
+
+- Deep-merge dicts into `coordinator.vars`; **non-dict leaves overwrite**.
+- Accepts `{"data": {...}}` or `{"kv": {...}}`.
+- Optional `block_sensitive=True` to reject suspicious values.
+- Returns: `{"ok": True, "touched": N}`
+
+#### `vars.incr(task_id: str, *, key: str, by: int|float = 1) -> dict`
+
+- Atomically increments a numeric leaf under `coordinator.vars.<key>` (using `$inc`).
+- Creates the leaf if it’s missing.
+- Validates that existing value is numeric; rejects `NaN`/`±Inf`.
+- Returns: `{"ok": True, "key": key, "by": by}`
+
+#### `vars.unset(task_id: str, *paths: str, keys: Iterable[str] | None = None) -> dict`
+
+- Removes one or more dotted keys under `coordinator.vars`.
+- After unsetting, **empty parent objects are pruned** in a second pass.
+- Returns: `{"ok": True, "touched": N}`
+
+### Limits & validation (defaults)
+
+| Limit | Default |
+|------|---------|
+| Max keys per operation | 256 |
+| Max nested depth (dots across full path, incl. `coordinator.vars.`) | 16 |
+| Max path length (characters) | 512 |
+| Max segment length (characters) | 128 |
+| Max value size (strings/bytes, UTF‑8) | 64 KiB |
+
+Additional rules:
+
+- Segments must be non-empty strings, must **not** start with `$`, contain `.` or NUL (`\x00`).
+- Non-dict leaves overwrite on merge.
+- Strings are measured in **UTF‑8 bytes** for size checks.
+
+### Sensitive value detection
+
+A built-in lightweight detector flags secret-like values. It never logs values (only counts). Heuristics include:
+
+- Entropy ≥ 3.2 bits/char and length ≥ 20
+- JWT/PEM/AWS/Google/Slack/Bearer token formats
+- Long base64-like strings
+
+Behavior:
+
+- If `block_sensitive=True` and any key looks sensitive → **AdapterError**
+- Otherwise write proceeds and logs record `sensitive_hits`
+
+### Structured logging
+
+Each adapter emits a structured log record:
+
+- Event names: `coord.vars.set`, `coord.vars.merge`, `coord.vars.incr`, `coord.vars.unset`, `coord.vars.unset.prune`
+- Fields: `task_id`, `keys` (sorted), `n`, `sensitive_hits` (where applicable)
+
+Example (conceptual):
+
+```text
+INFO coord.vars.set task_id=... keys=['coordinator.vars.a', 'coordinator.vars.b.c'] n=2 sensitive_hits=0
+```
+
+### Using adapters in a coordinator_fn
+
+```python
+# Node that seeds vars
+{
+  "node_id": "seed_vars",
+  "type": "coordinator_fn",
+  "io": {
+    "fn": "vars.set",
+    "fn_args": {
+      "kv": {
+        "sla.max_delay": 500,
+        "flags": {"ab": true, "beta": false}
+      }
+    }
+  }
+}
+
+# Node that bumps a counter
+{
+  "node_id": "count_pages",
+  "type": "coordinator_fn",
+  "depends_on": ["seed_vars"],
+  "io": {
+    "fn": "vars.incr",
+    "fn_args": {"key": "counters.pages", "by": 2}
+  }
+}
+```
+
+> Later coordinator functions can read `tasks.coordinator.vars` directly from MongoDB to make decisions.
 
 ## Error Handling
 
@@ -327,13 +452,14 @@ async def collect_coordinator_metrics(coordinator):
     ]).to_list(10)
 
     # Recent events
+    from datetime import datetime, timedelta
     recent_events = await coordinator.db.worker_events.count_documents({
         "created_at": {"$gte": datetime.utcnow() - timedelta(hours=1)}
     })
 
     return {
-        "tasks": dict(tasks_by_status),
-        "workers": dict(workers_by_status),
+        "tasks": {x["_id"]: x["count"] for x in tasks_by_status},
+        "workers": {x["_id"]: x["count"] for x in workers_by_status},
         "recent_events": recent_events
     }
 ```
