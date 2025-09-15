@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from tests.helpers.graph import wait_node_running
+from tests.helpers.graph import prime_graph, wait_node_running
 from tests.helpers.handlers import build_cancelable_source_handler
 
 from flowkit.protocol.messages import RunState
@@ -25,6 +25,8 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.vars]
 
 @pytest.mark.asyncio
 async def test_cancel_midflow_preserves_coordinator_vars(env_and_imports, inmemory_db, coord, worker_factory, tlog):
+    cd, _ = env_and_imports
+
     # Start a cancellable source worker (emits several batches with delays).
     await worker_factory(
         ("source", build_cancelable_source_handler(db=inmemory_db, total=100, batch=10, delay=0.25)),
@@ -50,6 +52,7 @@ async def test_cancel_midflow_preserves_coordinator_vars(env_and_imports, inmemo
         "edges": [("n1", "s")],
         "edges_ex": [],
     }
+    g = prime_graph(cd, g)
 
     task_id = await coord.create_task(params={}, graph=g)
 
