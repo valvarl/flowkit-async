@@ -11,7 +11,8 @@ from ..handlers.base import Batch
 
 class PullAdapters:
     """
-    pull.from_artifacts (+ rechunk) implemented as instance with injected db/clock.
+    Input pull adapters implemented with injected db/clock.
+    Adapters are schema-agnostic and must not rely on product-specific keys.
     """
 
     def __init__(self, *, db, clock: Clock, cfg: WorkerConfig) -> None:
@@ -163,9 +164,16 @@ class PullAdapters:
         poll_ms: int,
         eof_on_task_done: bool,
         backoff_max_ms: int,
-        meta_list_key: str | None,
         cancel_flag: asyncio.Event | None,
+        meta_list_key: str | None = None,
     ) -> AsyncIterator[Batch]:
+        """
+        Deterministically re-chunk upstream artifact meta into fixed-size batches.
+          - If `meta_list_key` is provided AND `meta[meta_list_key]` is a list → chunk that list.
+          - Otherwise → treat each artifact's meta as a single logical item (`items = [meta]`)
+            and chunk by `size`.
+        No schema heuristics are used.
+        """
         if size <= 0:
             size = 1
 
@@ -184,14 +192,12 @@ class PullAdapters:
                 parent_uid = b.batch_uid or stable_hash({"payload": b.payload})
                 meta = (b.payload or {}).get("meta") or {}
 
-                key = meta_list_key
-                if key is None:
-                    for cand in ("items", "skus", "enriched", "ocr"):
-                        if isinstance(meta.get(cand), list):
-                            key = cand
-                            break
-                items = meta.get(key) if key else None
-                if not isinstance(items, list):
+                # Deterministic selection: prefer explicit key if it's a list; otherwise single-item list.
+                if meta_list_key is not None and isinstance(meta.get(meta_list_key), list):
+                    chosen_key = meta_list_key
+                    items = meta[meta_list_key]
+                else:
+                    chosen_key = None
                     items = [meta]
 
                 idx = 0
@@ -203,7 +209,7 @@ class PullAdapters:
                         payload={
                             "from_node": src,
                             "items": chunk,
-                            "parent": {"ref": {"batch_uid": parent_uid}, "list_key": key},
+                            "parent": {"ref": {"batch_uid": parent_uid}, "meta_list_key": chosen_key},
                         },
                     )
                     idx += 1

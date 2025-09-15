@@ -222,7 +222,7 @@ async def test_coordinator_restart_adopts_inflight_without_new_epoch(
     When the coordinator restarts, it should adopt in-flight work without incrementing
     the worker's attempt_epoch unnecessarily (i.e., source keeps epoch=1).
     """
-    cd, wu = env_and_imports
+    cd, _ = env_and_imports
     tlog.debug("test.start", event="test.start", test_name="coordinator_restart_adopts_inflight_without_new_epoch")
 
     # Slow streaming source to ensure long-running inflight.

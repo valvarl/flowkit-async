@@ -59,11 +59,18 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
+  "e2e: end-to-end tests exercising scheduler and Kafka mocks",
+  "integration: integration test suite (runs coordinator + workers + broker mocks)",
+  "unit: unit test suite (pure/fast tests with small fixtures)",
   "worker_types(name): override worker types for this test module",
   "use_handlers(names): restrict which test handlers to instantiate",
   "cfg(coord=None, worker=None): per-test Coordinator/Worker config overrides",
   "use_outbox: enable real Outbox dispatcher (no bypass)",
+  "adapters: input adapters & routing tests (orchestrator-first contract)",
   "chaos: enable Kafka chaos mode (jitter/dup/drop) for this test",
+  "slow: slow tests (can be skipped via -m 'not slow')",
+  "streaming: streaming fan-in/fan-out and metrics tests",
+  "vars: vars/graph adapter tests and helpers",
 ]
 
 # --------------------------------------------------------------------

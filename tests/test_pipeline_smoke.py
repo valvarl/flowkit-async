@@ -40,7 +40,6 @@ async def workers_pipeline(env_and_imports, inmemory_db, worker_factory, tlog):
     Start four workers for roles: indexer, enricher, ocr, analyzer.
     Handlers come from tests.helpers.handlers and already receive `db`.
     """
-    _, wu = env_and_imports
     tlog.debug("test.workers.spawn", event="test.workers.spawn", roles=["indexer", "enricher", "ocr", "analyzer"])
     await worker_factory(
         ("indexer", build_indexer_handler(db=inmemory_db)),

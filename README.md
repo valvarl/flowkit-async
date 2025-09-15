@@ -8,8 +8,8 @@
 [![Kafka](https://img.shields.io/badge/infra-Kafka-black.svg)](https://kafka.apache.org/)
 [![MongoDB](https://img.shields.io/badge/storage-MongoDB-47A248.svg)](https://www.mongodb.com/)
 
-**flowkit-async** is a tiny async orchestration backbone that grew out of another pet project.  
-Fun fact: it started with **zero prior exposure to orchestration frameworks** — built from first principles.  
+**flowkit-async** is a tiny async orchestration backbone that grew out of another pet project.
+Fun fact: it started with **zero prior exposure to orchestration frameworks** — built from first principles.
 It speaks Kafka, stores state in MongoDB, and does **streaming-by-batches**.
 
 ## Why this exists

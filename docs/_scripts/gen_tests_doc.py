@@ -14,9 +14,9 @@ from __future__ import annotations
 import ast
 import html
 import textwrap
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import mkdocs_gen_files
 
@@ -216,7 +216,11 @@ def build() -> str:
 
         # ── Collapsible index entry per module
         marks_pool = sorted({m for ti in test_items for m in ti.marks})
-        marks_str = f" &nbsp; <small>(marks: {', '.join(html.escape(m) for m in marks_pool)})</small>" if marks_pool else ""
+        marks_str = (
+            f" &nbsp; <small>(marks: {', '.join(html.escape(m) for m in marks_pool)})</small>"
+            if marks_pool
+            else ""
+        )
         modules_index_html.append(
             f'<details>\n'
             f'  <summary><code>{html.escape(rel_path)}</code>'
