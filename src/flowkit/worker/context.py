@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shutil
 import signal
-import subprocess as subproc
+import subprocess as subproc  # nosec B404 - used only for CREATE_NEW_PROCESS_GROUP; no shell execution
 from collections.abc import Callable
 from typing import Any
 
+from ..core.log import get_logger, swallow
 from ..core.time import Clock
 
 
@@ -42,6 +45,7 @@ class RunContext:
         self.worker_id = worker_id
 
         self.kv: dict[str, Any] = {}
+        self.log = get_logger("worker.ctx")
         self._cleanup_callbacks: list[Callable[[], Any]] = []
         self._subprocesses: list[Any] = []
         self._temp_paths: list[str] = []
@@ -68,7 +72,7 @@ class RunContext:
         if self._cancel_flag.is_set():
             raise asyncio.CancelledError()
 
-    async def cancellable(self, coro: Any):
+    async def cancellable(self, coro: Any) -> Any:
         if self._cancel_flag.is_set():
             raise asyncio.CancelledError()
         task = asyncio.create_task(coro)
@@ -85,9 +89,13 @@ class RunContext:
         else:
             task.cancel()
             try:
-                await task
-            except Exception:
-                pass
+                await task  # drain cancellation
+            except asyncio.CancelledError:
+                # expected when our own cancellation wins the race
+                self.log.debug("ctx.cancellable.await_cancelled", event="ctx.cancellable.await_cancelled")
+            except Exception as e:
+                # task could have raced to a different exception; cancellation still wins
+                self.log.debug("ctx.cancellable.await_exc", event="ctx.cancellable.await_exc", error=str(e))
             raise asyncio.CancelledError()
 
     # ---- subprocess helpers
@@ -122,34 +130,49 @@ class RunContext:
         self._cleanup_callbacks.append(cb)
 
     async def _terminate_process(self, proc: Any, *, grace_ms: int = 5000) -> None:
+        if proc.returncode is not None:
+            return
+        if os.name == "posix":
+            with swallow(
+                logger=self.log, code="ctx.proc.killpg", msg="killpg SIGTERM failed", level=logging.DEBUG, expected=True
+            ):
+                os.killpg(proc.pid, signal.SIGTERM)
+            with swallow(
+                logger=self.log,
+                code="ctx.proc.terminate",
+                msg="proc.terminate failed",
+                level=logging.DEBUG,
+                expected=True,
+            ):
+                proc.terminate()
+        else:
+            with swallow(
+                logger=self.log,
+                code="ctx.proc.ctrl_break",
+                msg="CTRL_BREAK_EVENT failed",
+                level=logging.DEBUG,
+                expected=True,
+            ):
+                proc.send_signal(getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM))
+            with swallow(
+                logger=self.log,
+                code="ctx.proc.terminate.win",
+                msg="proc.terminate failed (win)",
+                level=logging.DEBUG,
+                expected=True,
+            ):
+                proc.terminate()
         try:
-            if proc.returncode is not None:
-                return
-            if os.name == "posix":
-                try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except Exception:
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
-            else:
-                try:
-                    proc.send_signal(getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM))
-                except Exception:
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=max(0.001, grace_ms / 1000.0))
-            except TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            await asyncio.wait_for(proc.wait(), timeout=max(0.001, grace_ms / 1000.0))
+        except TimeoutError:
+            with swallow(
+                logger=self.log,
+                code="ctx.proc.kill",
+                msg="proc.kill failed after timeout",
+                level=logging.DEBUG,
+                expected=True,
+            ):
+                proc.kill()
 
     async def _cleanup_resources(self) -> None:
         for cb in reversed(self._cleanup_callbacks):
@@ -157,32 +180,33 @@ class RunContext:
                 res = cb()
                 if asyncio.iscoroutine(res):
                     await res
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                # Cleanup during shutdown should not propagate cancellation.
+                self.log.debug("ctx.cleanup.cb.cancelled", event="ctx.cleanup.cb.cancelled")
+            except Exception as e:
+                self.log.debug("ctx.cleanup.cb.error", event="ctx.cleanup.cb.error", error=str(e))
         for proc in list(self._subprocesses):
-            try:
+            with swallow(
+                logger=self.log,
+                code="ctx.cleanup.proc_terminate",
+                msg="terminate subprocess failed",
+                level=logging.DEBUG,
+                expected=True,
+            ):
                 await self._terminate_process(proc, grace_ms=1000)
-            except Exception:
-                pass
         self._subprocesses.clear()
 
         for p in list(self._temp_paths):
-            try:
-                if os.path.isdir(p):
-                    for root, dirs, files in os.walk(p, topdown=False):
-                        for f in files:
-                            try:
-                                os.remove(os.path.join(root, f))
-                            except Exception:
-                                pass
-                        for d in dirs:
-                            try:
-                                os.rmdir(os.path.join(root, d))
-                            except Exception:
-                                pass
-                    os.rmdir(p)
-                elif os.path.exists(p):
+            if os.path.isdir(p):
+                # Best-effort recursive removal
+                shutil.rmtree(p, ignore_errors=True)
+            elif os.path.exists(p):
+                with swallow(
+                    logger=self.log,
+                    code="ctx.cleanup.unlink",
+                    msg="remove temp file failed",
+                    level=logging.DEBUG,
+                    expected=True,
+                ):
                     os.remove(p)
-            except Exception:
-                pass
         self._temp_paths.clear()
