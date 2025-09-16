@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
+from ..core.log import get_logger, swallow
 from ..core.time import Clock, SystemClock
 from ..core.utils import jitter_ms, stable_hash
 from ..protocol.messages import Envelope
+
+# Optional import: in some tests pymongo may be absent
+try:  # pragma: no cover - import-time branch
+    from pymongo.errors import DuplicateKeyError
+except Exception:  # pragma: no cover - fallback for environments w/o pymongo
+
+    class DuplicateKeyError(Exception):  # type: ignore
+        pass
 
 
 class OutboxDispatcher:
@@ -20,6 +30,7 @@ class OutboxDispatcher:
         self.cfg = cfg
         self.clock: Clock = clock or SystemClock()
         self._task: asyncio.Task | None = None
+        self.log = get_logger("outbox")
         self._running = False
 
     async def start(self) -> None:
@@ -32,8 +43,17 @@ class OutboxDispatcher:
             self._task.cancel()
             try:
                 await self._task
+            except asyncio.CancelledError:
+                return
             except Exception:
-                pass
+                with swallow(
+                    logger=self.log,
+                    code="outbox.stop.wait",
+                    msg="outbox loop join failed",
+                    level=logging.WARNING,
+                    expected=True,
+                ):
+                    raise
 
     async def _loop(self) -> None:
         try:
@@ -117,6 +137,5 @@ class OutboxDispatcher:
         }
         try:
             await self.db.outbox.insert_one(doc)
-        except Exception:
-            # duplicate fp is ok (idempotent)
-            pass
+        except DuplicateKeyError:
+            return
