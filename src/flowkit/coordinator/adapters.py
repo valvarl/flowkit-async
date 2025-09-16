@@ -514,12 +514,18 @@ class CoordinatorAdapters:
         cnt: dict[str, int] = {}
         async for m in cur:
             for k, v in (m.get("metrics") or {}).items():
-                try:
+                # Safe conversion to float without try/except/continue
+                x: float | None = None
+                if isinstance(v, int | float):
                     x = float(v)
-                except Exception:
-                    continue
-                acc[k] = acc.get(k, 0.0) + x
-                cnt[k] = cnt.get(k, 0) + 1
+                elif isinstance(v, str):
+                    try:
+                        x = float(v)
+                    except (TypeError, ValueError):
+                        x = None
+                if x is not None:
+                    acc[k] = acc.get(k, 0.0) + x
+                    cnt[k] = cnt.get(k, 0) + 1
 
         out = {k: (acc[k] / max(1, cnt[k])) for k in acc} if mode == "mean" else {k: acc[k] for k in acc}
 
@@ -596,10 +602,5 @@ class _SensitiveDetector:
             return False
         if any(r.match(s_stripped) for r in self.rx):
             return True
-        try:
-            ent = CoordinatorAdapters._entropy_bits_per_char(s_stripped)
-            if ent >= self.min_entropy:
-                return True
-        except Exception:
-            pass
-        return False
+        ent = CoordinatorAdapters._entropy_bits_per_char(s_stripped)
+        return ent >= self.min_entropy
