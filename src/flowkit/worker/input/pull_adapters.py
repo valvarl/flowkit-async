@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from ...core.config import WorkerConfig
 from ...core.time import Clock
 from ...core.utils import stable_hash
+from ...io.validation import adapter_aliases
 from ..handlers.base import Batch
 
 
@@ -221,8 +222,19 @@ class PullAdapters:
 
 
 def build_input_adapters(*, db, clock: Clock, cfg: WorkerConfig) -> dict[str, Callable[..., AsyncIterator[Batch]]]:
+    """Return both canonical adapters and their aliases mapped to implementations.
+
+    Aliases are sourced from io.validation.adapter_aliases() to keep registry in sync
+    with validation logic.
+    """
     impl = PullAdapters(db=db, clock=clock, cfg=cfg)
-    return {
+    base: dict[str, Callable[..., AsyncIterator[Batch]]] = {
         "pull.from_artifacts": impl.iter_from_artifacts,
         "pull.from_artifacts.rechunk:size": impl.iter_from_artifacts_rechunk,
     }
+    # add aliases -> point to the same implementation as their canonical names
+    aliases = adapter_aliases()
+    for alias, canon in aliases.items():
+        if canon in base:
+            base[alias] = base[canon]
+    return base

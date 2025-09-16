@@ -13,6 +13,7 @@ from ..core.config import WorkerConfig
 from ..core.log import bind_context, get_logger, log_context, swallow, warn_once
 from ..core.time import Clock, SystemClock
 from ..core.utils import dumps, loads, stable_hash
+from ..io.validation import normalize_adapter_args, validate_input_adapter
 from ..protocol.messages import (
     CmdTaskCancel,
     CmdTaskStart,
@@ -552,35 +553,18 @@ class Worker:
 
             # --- build batch iterator ---
             if adapter_name:
-                # ---- validate and normalize adapter args BEFORE starting streaming ----
-                def _normalize_aliases(args: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
-                    from_nodes = args.get("from_nodes") or ([args["from_node"]] if args.get("from_node") else [])
-                    kwargs = dict(args)
-                    kwargs.pop("from_nodes", None)
-                    kwargs.pop("from_node", None)
-                    kwargs.setdefault("poll_ms", self.cfg.pull_poll_ms_default)
-                    kwargs.setdefault("eof_on_task_done", True)
-                    kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
-                    return from_nodes, kwargs
+                from_nodes, adapter_kwargs = normalize_adapter_args(adapter_args)
+                # fill defaults based on worker config
+                adapter_kwargs.setdefault("poll_ms", self.cfg.pull_poll_ms_default)
+                adapter_kwargs.setdefault("eof_on_task_done", True)
+                adapter_kwargs.setdefault("backoff_max_ms", self.cfg.pull_empty_backoff_ms_max)
 
-                def _validate_adapter_args(name: str, args: dict[str, Any]) -> tuple[bool, str | None]:
-                    if name == "pull.from_artifacts":
-                        return True, None
-                    if name == "pull.from_artifacts.rechunk:size":
-                        if not isinstance(args.get("size"), int) or args["size"] <= 0:
-                            return False, "missing or invalid 'size' (positive int required)"
-                        mlk = args.get("meta_list_key", None)
-                        if mlk is not None and not isinstance(mlk, str):
-                            return False, "'meta_list_key' must be a string if provided"
-                        # strict mode: require meta_list_key
-                        if self.cfg.strict_input_adapters and not isinstance(mlk, str):
-                            return False, "strict mode: 'meta_list_key' is required and must be a string"
-                        return True, None
-                    return False, f"unknown adapter '{name}'"
+                ok, why = validate_input_adapter(
+                    adapter_name,
+                    {**adapter_kwargs, "from_nodes": from_nodes},
+                    strict=self.cfg.strict_input_adapters,
+                )
 
-                # normalize first
-                from_nodes, adapter_kwargs = _normalize_aliases(adapter_args)
-                ok, why = _validate_adapter_args(adapter_name, {**adapter_kwargs, "from_nodes": from_nodes})
                 if not ok:
                     self.log.error(
                         "worker.adapter.validation_failed",
@@ -720,11 +704,15 @@ class Worker:
             await self._emit_task_failed(role, start_env, reason, permanent, str(e))
             return
         finally:
-            try:
+            with swallow(
+                logger=self.log,
+                code="worker.ctx.cleanup",
+                msg="context cleanup failed",
+                level=logging.WARNING,
+                expected=True,
+            ):
                 if ctx is not None:
                     await ctx._cleanup_resources()
-            except Exception:
-                pass
             if not self._stopping:
                 await self._cleanup_after_run()
 
@@ -843,7 +831,7 @@ class Worker:
         await self._send_status(role, env)
 
     async def _emit_task_done(
-        self, role: str, base: Envelope, metrics: dict[str, int], artifacts_ref: dict[str, Any] | None
+        self, role: str, base: Envelope, metrics: dict[str, Any], artifacts_ref: dict[str, Any] | None
     ) -> None:
         env = Envelope(
             msg_type=MsgType.event,
@@ -953,13 +941,17 @@ class Worker:
                     }
                 else:
                     complete = False
-                    try:
+                    with swallow(
+                        logger=self.log,
+                        code="worker.query.complete_check",
+                        msg="complete snapshot check failed",
+                        level=logging.WARNING,
+                        expected=True,
+                    ):
                         cnt = await self.db.artifacts.count_documents(
                             {"task_id": env.task_id, "node_id": env.node_id, "status": "complete"}
                         )
                         complete = cnt > 0
-                    except Exception:
-                        pass
                     payload = {
                         "reply": ReplyKind.TASK_SNAPSHOT,
                         "worker_id": None,

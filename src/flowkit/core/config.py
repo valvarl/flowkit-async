@@ -9,6 +9,8 @@ from typing import Any
 
 @dataclass
 class CoordinatorConfig:
+    """Coordinator configuration loaded from JSON/env with derived millisecond fields."""
+
     # ---- Kafka & topics
     kafka_bootstrap: str = "kafka:9092"
     worker_types: list[str] = field(default_factory=lambda: ["indexer", "enricher", "grouper", "analyzer"])
@@ -36,7 +38,12 @@ class CoordinatorConfig:
     outbox_backoff_min_ms: int = 250
     outbox_backoff_max_ms: int = 60_000
 
-    # derived (ms) — computed in __post_init__
+    # ---- input adapters policy (fail-fast at coordinator)
+    # When True, the coordinator validates input adapters in strict mode,
+    # mirroring WorkerConfig.strict_input_adapters.
+    strict_input_adapters: bool = False
+
+    # ---- derived (ms) — computed in __post_init__
     hb_soft_ms: int = 0
     hb_hard_ms: int = 0
     lease_ttl_ms: int = 0
@@ -51,6 +58,7 @@ class CoordinatorConfig:
         self._derive_ms()
 
     def _derive_ms(self) -> None:
+        """Populate millisecond fields derived from second-based values."""
         self.hb_soft_ms = int(self.heartbeat_soft_sec * 1000)
         self.hb_hard_ms = int(self.heartbeat_hard_sec * 1000)
         self.lease_ttl_ms = int(self.lease_ttl_sec * 1000)
@@ -71,33 +79,35 @@ class CoordinatorConfig:
     # ---- loading
     @classmethod
     def load(cls, path: str | Path | None = None, *, overrides: dict[str, Any] | None = None) -> CoordinatorConfig:
+        """Load config from JSON (file or default), then apply env and explicit overrides."""
         data: dict[str, Any] = {}
         # 1) base JSON
         if path:
             p = Path(path)
         else:
-            # default bundled config
+            # default bundled config relative to repo root
             p = Path(__file__).resolve().parents[3] / "configs" / "coordinator.default.json"
         if p.exists():
             data.update(json.loads(p.read_text(encoding="utf-8")))
 
-        # 2) environment (minimal; keep it human)
+        # 2) environment
         if os.getenv("KAFKA_BOOTSTRAP_SERVERS"):
             data["kafka_bootstrap"] = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
         if os.getenv("WORKER_TYPES"):
             data["worker_types"] = [s.strip() for s in os.environ["WORKER_TYPES"].split(",") if s.strip()]
 
-        # 3) direct overrides (tests)
+        # 3) direct overrides (tests/CLI)
         if overrides:
             data.update(overrides)
 
-        cfg = cls(**data)
-        cfg._derive_ms()
-        return cfg
+        # __post_init__ will derive ms
+        return cls(**data)
 
 
 @dataclass
 class WorkerConfig:
+    """Worker configuration including adapter policy and timing."""
+
     # Kafka
     kafka_bootstrap: str = "kafka:9092"
 
@@ -131,9 +141,8 @@ class WorkerConfig:
     db_cancel_poll_ms: int = 500
 
     # ---- derived (computed in post_init) ----
-    # Input adapters policy
-    # When True, certain adapters (e.g., pull.from_artifacts.rechunk:size) must receive
-    # explicit arguments such as `meta_list_key`, otherwise worker fails early with bad_input_args.
+    # When True, certain adapters must receive explicit args (e.g. meta_list_key),
+    # otherwise the worker fails early with bad_input_args.
     strict_input_adapters: bool = False
     lease_ttl_ms: int = 60_000
     hb_interval_ms: int = 20_000
@@ -153,11 +162,16 @@ class WorkerConfig:
 
     # ---- loader
     @staticmethod
-    def load(path: str = "configs/worker.default.json", overrides: dict[str, Any] | None = None) -> WorkerConfig:
+    def load(path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> WorkerConfig:
+        """Load config from JSON (file or default), then apply overrides."""
         data: dict[str, Any] = {}
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+        if path:
+            p = Path(path)
+        else:
+            # default bundled config relative to repo root
+            p = Path(__file__).resolve().parents[3] / "configs" / "worker.default.json"
+        if p.exists():
+            data.update(json.loads(p.read_text(encoding="utf-8")))
         if overrides:
             data.update(overrides)
         return WorkerConfig(**data)

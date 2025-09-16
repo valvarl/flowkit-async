@@ -195,7 +195,8 @@ class TaskDoc(BaseModel):
     pipeline_id: str
     status: RunState = RunState.queued
     params: dict[str, Any] = {}
-    graph: dict[str, Any] = {"nodes": [], "edges": [], "edges_ex": []}
+    graph: dict[str, Any] = {"nodes": []}
+    execution_plan: dict[str, Any] = {}
     result: dict[str, Any] | None = None
     status_history: list[dict[str, Any]] = []
     coordinator: dict[str, Any] = {"liveness": {"state": "ok"}}
