@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
+from ..core.log import get_logger, swallow
 from ..core.time import Clock, SystemClock
-from ..core.utils import stable_hash
+from ..core.utils import jitter_ms, stable_hash
 from ..protocol.messages import Envelope
+
+# Optional import: in some tests pymongo may be absent
+try:  # pragma: no cover - import-time branch
+    from pymongo.errors import DuplicateKeyError
+except Exception:  # pragma: no cover - fallback for environments w/o pymongo
+
+    class DuplicateKeyError(Exception):  # type: ignore
+        pass
 
 
 class OutboxDispatcher:
@@ -20,6 +30,7 @@ class OutboxDispatcher:
         self.cfg = cfg
         self.clock: Clock = clock or SystemClock()
         self._task: asyncio.Task | None = None
+        self.log = get_logger("outbox")
         self._running = False
 
     async def start(self) -> None:
@@ -32,8 +43,17 @@ class OutboxDispatcher:
             self._task.cancel()
             try:
                 await self._task
+            except asyncio.CancelledError:
+                return
             except Exception:
-                pass
+                with swallow(
+                    logger=self.log,
+                    code="outbox.stop.wait",
+                    msg="outbox loop join failed",
+                    level=logging.WARNING,
+                    expected=True,
+                ):
+                    raise
 
     async def _loop(self) -> None:
         try:
@@ -51,7 +71,7 @@ class OutboxDispatcher:
                 async for ob in cur:
                     try:
                         env = Envelope.model_validate(ob["envelope"])
-                        await self.bus._raw_send(ob["topic"], ob["key"].encode("utf-8"), env)
+                        await self.bus.send(ob["topic"], ob["key"].encode("utf-8"), env)
                         _flt = {"_id": ob["_id"]} if ob.get("_id") is not None else {"fp": ob.get("fp")}
                         await self.db.outbox.update_one(
                             _flt,
@@ -84,11 +104,7 @@ class OutboxDispatcher:
                             backoff_ms = min(
                                 self.cfg.outbox_backoff_max_ms, max(self.cfg.outbox_backoff_min_ms, (2**attempts) * 100)
                             )
-                            # light jitter without RNG dep injection
-                            import random
-
-                            delta = int(backoff_ms * 0.2)
-                            backoff_ms = max(0, backoff_ms + random.randint(-delta, +delta))
+                            backoff_ms = jitter_ms(backoff_ms)
                             _flt = {"_id": ob.get("_id")} if ob.get("_id") is not None else {"fp": ob.get("fp")}
                             await self.db.outbox.update_one(
                                 _flt,
@@ -121,6 +137,5 @@ class OutboxDispatcher:
         }
         try:
             await self.db.outbox.insert_one(doc)
-        except Exception:
-            # duplicate fp is ok (idempotent)
-            pass
+        except DuplicateKeyError:
+            return

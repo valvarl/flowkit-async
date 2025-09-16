@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from functools import lru_cache
 
 from ...core.config import WorkerConfig
+from ...core.log import get_logger
 from ...core.time import Clock
 from ...core.utils import stable_hash
+from ...io.validation import adapter_aliases
 from ..handlers.base import Batch
+
+
+@lru_cache(maxsize=1)
+def _log():
+    # lazy init to avoid work at import time
+    return get_logger("worker.input.pull")
 
 
 class PullAdapters:
@@ -60,6 +69,7 @@ class PullAdapters:
                             batch_uid = a.get("batch_uid")
                             if not batch_uid:
                                 continue
+                            claimed = True
                             try:
                                 await self.db.stream_progress.insert_one(
                                     {
@@ -70,7 +80,17 @@ class PullAdapters:
                                         "claimed_at": self.clock.now_dt(),
                                     }
                                 )
-                            except Exception:
+                            except Exception as e:
+                                # someone else claimed or storage error — skip this one this round
+                                _log().debug(
+                                    "pull.claim.failed",
+                                    event="pull.claim.failed",
+                                    src=src,
+                                    batch_uid=batch_uid,
+                                    error=str(e),
+                                )
+                                claimed = False
+                            if not claimed:
                                 continue
                             matched += 1
                             got_any = True
@@ -109,8 +129,15 @@ class PullAdapters:
                                             "claimed_at": self.clock.now_dt(),
                                         }
                                     )
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # fallback path: still mark as claimed in-memory to avoid duplicates
+                                    _log().debug(
+                                        "pull.claim.mem_only",
+                                        event="pull.claim.mem_only",
+                                        src=src,
+                                        batch_uid=batch_uid,
+                                        error=str(e),
+                                    )
                                 claimed_mem.add(key)
                                 matched += 1
                                 got_any = True
@@ -221,8 +248,19 @@ class PullAdapters:
 
 
 def build_input_adapters(*, db, clock: Clock, cfg: WorkerConfig) -> dict[str, Callable[..., AsyncIterator[Batch]]]:
+    """Return both canonical adapters and their aliases mapped to implementations.
+
+    Aliases are sourced from io.validation.adapter_aliases() to keep registry in sync
+    with validation logic.
+    """
     impl = PullAdapters(db=db, clock=clock, cfg=cfg)
-    return {
+    base: dict[str, Callable[..., AsyncIterator[Batch]]] = {
         "pull.from_artifacts": impl.iter_from_artifacts,
         "pull.from_artifacts.rechunk:size": impl.iter_from_artifacts_rechunk,
     }
+    # add aliases -> point to the same implementation as their canonical names
+    aliases = adapter_aliases()
+    for alias, canon in aliases.items():
+        if canon in base:
+            base[alias] = base[canon]
+    return base

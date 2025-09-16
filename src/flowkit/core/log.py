@@ -133,17 +133,27 @@ class JsonFormatter(logging.Formatter):
                 out[k] = v
 
         # Exception / stack
+        # Normalize exc_info to a tuple if needed
+        exc = None
         if record.exc_info:
-            exc_type = record.exc_info[0].__name__ if record.exc_info[0] else "Exception"
+            if isinstance(record.exc_info, BaseException):
+                e = record.exc_info
+                exc = (type(e), e, e.__traceback__)
+            elif record.exc_info is True:
+                exc = sys.exc_info()
+            elif isinstance(record.exc_info, tuple):
+                exc = record.exc_info
+        if exc:
+            exc_type = exc[0].__name__ if exc[0] else "Exception"
             out.setdefault("error", {})
             out["error"].update(
                 {
                     "type": exc_type,
-                    "message": str(record.exc_info[1]) if record.exc_info[1] else None,
+                    "message": str(exc[1]) if exc[1] else None,
                 }
             )
             if self.include_stack:
-                out["error"]["stack"] = self.formatException(record.exc_info)
+                out["error"]["stack"] = self.formatException(exc)
         elif record.exc_text:
             out.setdefault("error", {})
             out["error"]["stack"] = record.exc_text
@@ -171,7 +181,14 @@ class HumanFormatter(logging.Formatter):
                 parts = ", ".join(f"{k}={v}" for k, v in compact.items())
                 s += f"  [{parts}]"
         if record.exc_info:
-            s += "\n" + self.formatException(record.exc_info)
+            if isinstance(record.exc_info, BaseException):
+                e = record.exc_info
+                exc = (type(e), e, e.__traceback__)
+            elif record.exc_info is True:
+                exc = sys.exc_info()
+            else:
+                exc = record.exc_info
+            s += "\n" + self.formatException(exc)
         return s
 
 
@@ -288,6 +305,17 @@ def get_logger(name: str | None = None) -> logging.LoggerAdapter:
     return _KwExtraAdapter(target, {})
 
 
+def _resolve_level(level: int | str) -> int:
+    """Map 'INFO' → 20, pass-through ints, raise on invalid."""
+    if isinstance(level, int):
+        return level
+    if isinstance(level, str):
+        val = getattr(logging, level.upper(), None)
+        if isinstance(val, int):
+            return val
+    raise ValueError("Invalid level name")
+
+
 def _bootstrap_minimal() -> None:
     """
     Install a NullHandler and a context filter so importing library code is silent by default.
@@ -309,11 +337,7 @@ def set_level(level: int | str) -> None:
     """
     Change library logger level at runtime (affects children).
     """
-    if isinstance(level, str):
-        level = logging.getLevelName(level.upper())
-        if isinstance(level, str):  # unknown name -> numeric not resolved
-            raise ValueError("Invalid level name")
-    logging.getLogger(_FLOWKIT_LOGGER_NAME).setLevel(level)
+    logging.getLogger(_FLOWKIT_LOGGER_NAME).setLevel(_resolve_level(level))
 
 
 def enable_stdout_logging(
@@ -329,12 +353,7 @@ def enable_stdout_logging(
     - json_output=True -> JsonFormatter; pretty=True -> HumanFormatter
     - route_errors_to_stderr=True -> ERROR+ to stderr, others to stdout
     """
-    if isinstance(level, str):
-        lvl = logging.getLevelName(level.upper())
-        if isinstance(lvl, str):
-            raise ValueError("Invalid level name")
-        level = lvl
-
+    lvl = _resolve_level(level)
     _bootstrap_minimal()
     lg = logging.getLogger(_FLOWKIT_LOGGER_NAME)
 
@@ -354,7 +373,7 @@ def enable_stdout_logging(
         # stdout: <= WARNING
         h_out = logging.StreamHandler(sys.stdout)
         h_out.set_name(_stdout_handler_key)
-        h_out.setLevel(level)
+        h_out.setLevel(lvl)
         h_out.addFilter(_MaxLevelFilter(logging.WARNING))
         h_out.setFormatter(fmt)
         lg.addHandler(h_out)
@@ -362,14 +381,14 @@ def enable_stdout_logging(
         # stderr: >= ERROR
         h_err = logging.StreamHandler(sys.stderr)
         h_err.set_name(_stderr_handler_key)
-        h_err.setLevel(max(level, logging.ERROR))
+        h_err.setLevel(max(lvl, logging.ERROR))
         h_err.addFilter(_MinLevelFilter(logging.ERROR))
         h_err.setFormatter(fmt)
         lg.addHandler(h_err)
     else:
         h = logging.StreamHandler(sys.stdout)
         h.set_name(_stdout_handler_key)
-        h.setLevel(level)
+        h.setLevel(lvl)
         h.setFormatter(fmt)
         lg.addHandler(h)
 
@@ -437,11 +456,11 @@ def swallow(
         log_adapter = _KwExtraAdapter(base_logger, {})
     try:
         yield
-    except Exception as e:
+    except Exception:
         payload: dict[str, Any] = {"code": code, "expected": expected}
         if extra:
             payload.update(dict(extra))
-        log_adapter.log(level, msg or "Suppressed exception", exc_info=e, **payload)
+        log_adapter.log(level, msg or "Suppressed exception", exc_info=True, **payload)
         if reraise:
             raise
         return return_value

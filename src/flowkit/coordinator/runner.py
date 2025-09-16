@@ -19,6 +19,8 @@ from ..core.log import (
 )
 from ..core.time import Clock, SystemClock
 from ..core.utils import stable_hash
+from ..graph.compiler import prepare_for_task_create
+from ..io.validation import normalize_adapter_args, validate_input_adapter
 from ..outbox.dispatcher import OutboxDispatcher
 from ..protocol.messages import (
     CmdTaskStart,
@@ -39,6 +41,10 @@ from ..protocol.messages import (
     TaskDoc,
 )
 from .adapters import AdapterError, default_adapters
+
+# Common projection for places where execution plan is needed together with graph.
+# Keep it in one place to avoid projection drift between call sites.
+_TASK_PROJ_PLAN = {"id": 1, "graph": 1, "execution_plan": 1}
 
 
 class Coordinator:
@@ -63,7 +69,7 @@ class Coordinator:
             self.cfg.worker_types = list(worker_types)
 
         self.clock: Clock = clock or SystemClock()
-        self.bus = KafkaBus(self.cfg)
+        self.bus = KafkaBus(self.cfg.kafka_bootstrap)
         self.outbox = OutboxDispatcher(db=db, bus=self.bus, cfg=self.cfg, clock=self.clock)
         self.adapters = adapters or dict(default_adapters(db=db, clock=self.clock, detector=sensitive_detector))
 
@@ -156,6 +162,25 @@ class Coordinator:
         except Exception:
             warn_once(self.log, code=code, msg=msg, level=logging.WARNING)
 
+    # ---- one-shot debug for readiness skips ----
+    def _log_node_not_ready_once(self, *, task_id: str, node: dict[str, Any], reason: str, **extra: Any) -> None:
+        """
+        Emit a single debug line per (task,node,reason) to explain why the node
+        wasn't started. Prevents log spam in tight scheduler loops.
+        """
+        code = f"node.ready.skip:{task_id}:{node.get('node_id')}:{reason}"
+        warn_once(
+            self.log,
+            code=code,
+            msg="node not ready",
+            level=logging.DEBUG,
+            event="coord.node.ready.no",
+            task_id=task_id,
+            node_id=node.get("node_id"),
+            reason=reason,
+            **extra,
+        )
+
     # ---- consumers
     async def _start_consumers(self) -> None:
         self._announce_consumer = await self.bus.new_consumer(
@@ -164,7 +189,7 @@ class Coordinator:
         self._spawn(self._run_announce_consumer(self._announce_consumer))
 
         for t in self.cfg.worker_types:
-            topic = self.bus.topic_status(t)
+            topic = self.cfg.topic_status(t)
             c = await self.bus.new_consumer([topic], group_id=f"{self._gid}.status.{t}", manual_commit=True)
             self._status_consumers[t] = c
             self._spawn(self._run_status_consumer(t, c))
@@ -225,6 +250,8 @@ class Coordinator:
                     )
                     continue
                 if not (env.msg_type == MsgType.event and env.role == Role.worker):
+                    # commit even when skipping non-worker or non-event messages;
+                    # otherwise the consumer will re-read the same record forever.
                     await self._commit_with_warn(
                         c,
                         code="kafka.commit.announce",
@@ -455,35 +482,92 @@ class Coordinator:
                 return n
         return None
 
-    def _children_of(self, task_doc: dict[str, Any], node_id: str) -> list[str]:
-        g = task_doc.get("graph", {})
-        edges = g.get("edges") or []
-        out = [dst for (src, dst) in edges if src == node_id]
-        out.extend(ex.get("to") for ex in (g.get("edges_ex") or []) if ex.get("from") == node_id)
-        return list(dict.fromkeys(out))
-
-    def _edges_ex_from(self, task_doc: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
-        return [ex for ex in (task_doc.get("graph", {}).get("edges_ex") or []) if ex.get("from") == node_id]
-
     # ---- Public API
     async def create_task(self, *, params: dict[str, Any], graph: dict[str, Any]) -> str:
         task_id = str(uuid.uuid4())
-        graph.setdefault("nodes", [])
-        graph.setdefault("edges", [])
-        graph.setdefault("edges_ex", [])
+
+        try:
+            spec, plan, graph_runtime = prepare_for_task_create(
+                graph,
+                allowed_roles=self.cfg.worker_types,
+            )
+        except Exception:
+            self.log.error("coord.graph.validation_failed", event="coord.graph.validation_failed", exc_info=True)
+            raise
+
         doc = TaskDoc(
             id=task_id,
             pipeline_id=task_id,
             status=RunState.queued,
             params=params,
-            graph=graph,
+            graph=graph_runtime,  # normalized runtime view (nodes with runtime fields), no edges/edges_ex
+            execution_plan=plan,  # explicit plan for coordinator runtime
             status_history=[{"from": None, "to": RunState.queued, "at": self.clock.now_dt()}],
             started_at=self.clock.now_dt().isoformat(),
             last_event_recv_ms=self.clock.now_ms(),
         ).model_dump(mode="json")
+
         await self.db.tasks.insert_one(doc)
         self.log.debug("task.created", event="coord.task.created", task_id=task_id)
         return task_id
+
+    def _plan_children(self, task_doc: dict[str, Any], parent_id: str) -> list[str]:
+        plan = task_doc.get("execution_plan") or {}
+        return list(plan.get("children_by_parent", {}).get(parent_id, []) or [])
+
+    def _plan_trigger_kind(self, task_doc: dict[str, Any], child_id: str, parent_id: str) -> str | None:
+        plan = task_doc.get("execution_plan") or {}
+        return ((plan.get("triggers", {}) or {}).get(child_id, {}) or {}).get(parent_id)
+
+    def _plan_parents(self, task_doc: dict[str, Any], child_id: str) -> list[str]:
+        plan = task_doc.get("execution_plan") or {}
+        return list(plan.get("parents_by_child", {}).get(child_id, []) or [])
+
+    def _build_io_plan(self, task_doc: dict[str, Any], node: dict[str, Any]) -> dict[str, Any] | None:
+        """Build explicit `input_inline` (adapter + args) for the node.
+        Rules:
+          - If node already defines an adapter → validate and return as-is.
+          - Else if it has parents → default to pull.from_artifacts(from_nodes=parents).
+          - Else (no parents) → return None (source handler is expected to generate input).
+        """
+        io = node.get("io") or {}
+        ii = (io.get("input_inline") or {}) if isinstance(io.get("input_inline"), dict) else {}
+        adapter = ii.get("input_adapter")
+        args = (ii.get("input_args") or {}) if isinstance(ii.get("input_args"), dict) else {}
+
+        parents = self._plan_parents(task_doc, node["node_id"])
+        # Fallback: if plan is absent, use depends_on from the runtime graph
+        if not parents:
+            parents = list(node.get("depends_on") or [])
+
+        # Explicit adapter present → validate and return
+        if adapter:
+            from_nodes, kwargs_norm = normalize_adapter_args(args or {})
+            # Sanity check: from_nodes ⊆ parents (if parents exist)
+            if from_nodes and parents:
+                invalid = [x for x in from_nodes if x not in parents]
+                if invalid:
+                    raise ValueError(f"node {node['node_id']}: input_args.from_nodes not subset of parents: {invalid}")
+            ok, why = validate_input_adapter(
+                adapter, {**kwargs_norm, "from_nodes": from_nodes}, strict=self.cfg.strict_input_adapters
+            )
+            if not ok:
+                raise ValueError(f"node {node['node_id']}: {why}")
+            return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": from_nodes}}
+
+        # No explicit adapter → auto-build if parents exist
+        if parents:
+            adapter = "pull.from_artifacts"
+            from_nodes, kwargs_norm = normalize_adapter_args({"from_nodes": parents})
+            ok, why = validate_input_adapter(
+                adapter, {**kwargs_norm, "from_nodes": from_nodes}, strict=self.cfg.strict_input_adapters
+            )
+            if not ok:
+                raise ValueError(f"node {node['node_id']}: {why}")
+            return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": parents}}
+
+        # Source node: no adapter
+        return None
 
     # ---- Scheduler loop
     async def _scheduler_loop(self) -> None:
@@ -517,32 +601,76 @@ class Coordinator:
         return (await self.db.artifacts.find_one(q)) is not None
 
     async def _node_ready(self, task_doc, node) -> bool:
+        task_id = task_doc.get("id")
         status = self._to_runstate(node.get("status"))
         if status not in (RunState.queued, RunState.deferred):
+            self._log_node_not_ready_once(task_id=task_id, node=node, reason="bad_status", node_status=str(status))
             return False
         if status == RunState.deferred:
             nra = int(node.get("next_retry_at_ms") or 0)
-            if nra and nra > self.clock.now_ms():
+            now = self.clock.now_ms()
+            if nra and nra > now:
+                self._log_node_not_ready_once(
+                    task_id=task_id,
+                    node=node,
+                    reason="deferred_backoff",
+                    next_retry_at_ms=nra,
+                    now_ms=now,
+                    wait_ms=max(0, nra - now),
+                )
                 return False
 
         io = node.get("io") or {}
         start_when = (io.get("start_when") or "").lower()
         if start_when == "first_batch":
-            return await self._first_batch_available(task_doc, node)
+            fb = await self._first_batch_available(task_doc, node)
+            if not fb:
+                args = (io.get("input_inline") or {}).get("input_args") or {}
+                fnodes = args.get("from_nodes") or (node.get("depends_on") or [])
+                self._log_node_not_ready_once(
+                    task_id=task_id, node=node, reason="awaiting_first_batch", from_nodes=fnodes
+                )
+            return fb
 
         deps = node.get("depends_on") or []
         dep_states = [self._to_runstate((self._get_node(task_doc, d) or {}).get("status")) for d in deps]
         fan_in = (node.get("fan_in") or "all").lower()
         if fan_in == "all":
-            return all(s == RunState.finished for s in dep_states)
+            ok = all(s == RunState.finished for s in dep_states)
+            if not ok:
+                self._log_node_not_ready_once(
+                    task_id=task_id,
+                    node=node,
+                    reason="fanin_all_pending",
+                    deps=deps,
+                    finished=sum(1 for s in dep_states if s == RunState.finished),
+                    total=len(dep_states),
+                )
+            return ok
         if fan_in == "any":
-            return any(s == RunState.finished for s in dep_states)
+            ok = any(s == RunState.finished for s in dep_states)
+            if not ok:
+                self._log_node_not_ready_once(
+                    task_id=task_id, node=node, reason="fanin_any_pending", deps=deps, finished=0, total=len(dep_states)
+                )
+            return ok
         if fan_in.startswith("count:"):
             try:
                 k = int(fan_in.split(":", 1)[1])
             except Exception:
                 k = len(deps)
-            return sum(1 for s in dep_states if s == RunState.finished) >= k
+            have = sum(1 for s in dep_states if s == RunState.finished)
+            ok = have >= k
+            if not ok:
+                self._log_node_not_ready_once(
+                    task_id=task_id,
+                    node=node,
+                    reason="fanin_count_pending",
+                    required=k,
+                    finished=have,
+                    total=len(dep_states),
+                )
+            return ok
         return False
 
     async def _schedule_ready_nodes(self) -> None:
@@ -555,6 +683,7 @@ class Coordinator:
                 continue
             if self._to_runstate(t.get("status")) == RunState.queued:
                 await self.db.tasks.update_one({"id": t["id"]}, {"$set": {"status": RunState.running}})
+                self.log.debug("task.bump.running", event="coord.task.bump_running", task_id=t["id"])
             for n in t.get("graph", {}).get("nodes") or []:
                 if n.get("type") == "coordinator_fn":
                     if await self._node_ready(t, n):
@@ -617,7 +746,7 @@ class Coordinator:
 
     # ---- enqueue helpers
     async def _enqueue_cmd(self, env: Envelope) -> None:
-        topic = self.bus.topic_cmd(env.step_type)
+        topic = self.cfg.topic_cmd(env.step_type)
         key = f"{env.task_id}:{env.node_id}"
         await self.outbox.enqueue(topic=topic, key=key, env=env)
 
@@ -626,6 +755,14 @@ class Coordinator:
         await self.outbox.enqueue(topic=self.cfg.topic_query, key=key, env=env)
 
     async def _enqueue_signal(self, *, key_worker_id: str, env: Envelope) -> None:
+        self.log.debug(
+            "signal.cancel.enqueued",
+            event="coord.signal.cancel",
+            target_worker_id=key_worker_id,
+            task_id=env.task_id,
+            node_id=env.node_id,
+            deadline_ts_ms=(env.payload or {}).get("deadline_ts_ms"),
+        )
         await self.outbox.enqueue(topic=self.cfg.topic_signals, key=key_worker_id, env=env)
 
     async def _preflight_and_maybe_start(self, task_doc: dict[str, Any], node: dict[str, Any]) -> None:
@@ -661,9 +798,9 @@ class Coordinator:
                 )
                 self.log.debug("preflight.complete.cached", event="coord.preflight.complete", node_id=node_id)
                 return
-        except Exception as e:
+        except Exception:
             self.log.warning(
-                "preflight.complete.check_failed", event="coord.preflight.complete_check_failed", exc_info=e
+                "preflight.complete.check_failed", event="coord.preflight.complete_check_failed", exc_info=True
             )
 
         discover_env = Envelope(
@@ -764,8 +901,8 @@ class Coordinator:
                         window_ms=self.cfg.discovery_window_ms,
                     )
                     return
-        except Exception as e:
-            self.log.warning("preflight.gate.check_failed", event="coord.preflight.gate_check_failed", exc_info=e)
+        except Exception:
+            self.log.warning("preflight.gate.check_failed", event="coord.preflight.gate_check_failed", exc_info=True)
 
         # CAS transition
         q = {
@@ -797,10 +934,35 @@ class Coordinator:
         )
 
         cancel_token = str(uuid.uuid4())
+
+        # Build explicit I/O plan (may be None for source nodes)
+        try:
+            io_inline = self._build_io_plan(task_doc, node)
+        except Exception as e:
+            # Defer the node with validation error to avoid tight retry loops
+            backoff = int((node.get("retry_policy") or {}).get("backoff_sec") or 300)
+            await self.db.tasks.update_one(
+                {"id": task_id, "graph.nodes.node_id": node_id},
+                {
+                    "$set": {
+                        "graph.nodes.$.status": RunState.deferred,
+                        "graph.nodes.$.next_retry_at_ms": self.clock.now_ms() + backoff * 1000,
+                        "graph.nodes.$.last_error": f"io_plan:{e}",
+                    }
+                },
+            )
+            self.log.error(
+                "preflight.io_plan.invalid",
+                event="coord.preflight.io_plan.invalid",
+                node_id=node_id,
+                error=str(e),
+            )
+            return
+
         cmd = CmdTaskStart(
             cmd=CommandKind.TASK_START,
             input_ref=node.get("io", {}).get("input_ref"),
-            input_inline=node.get("io", {}).get("input_inline"),
+            input_inline=io_inline,
             batching=node.get("io", {}).get("batching"),
             cancel_token=cancel_token,
         )
@@ -897,54 +1059,99 @@ class Coordinator:
             },
         )
 
-    async def _maybe_start_children_on_first_batch(self, parent_task: dict[str, Any], parent_node_id: str) -> None:
+    async def _maybe_start_children(
+        self, parent_task: dict[str, Any], parent_node_id: str, *, trigger_kind: str
+    ) -> None:
+        """
+        Start child nodes that are triggered by a specific parent event.
+
+        Semantics:
+        - trigger_kind == "on_batch": fire ASAP to minimize latency.
+          * If the plan says "on_batch" for (parent→child) → start immediately (no readiness gate).
+          * Otherwise, if child's io.start_when == "first_batch" → only start if _node_ready()
+            (preserves historical behavior).
+        - trigger_kind == "on_done": start as early as possible but *respect readiness*
+          (fan-in, deferred backoff, etc.) via _node_ready().
+        """
         task_id = parent_task["id"]
         if (parent_task.get("coordinator") or {}).get("cancelled") is True:
             return
-        edges_ex = self._edges_ex_from(parent_task, parent_node_id)
-        direct_children = self._children_of(parent_task, parent_node_id)
-        if not direct_children:
+
+        children = self._plan_children(parent_task, parent_node_id)
+        if not children:
             return
 
-        for child_id in direct_children:
+        for child_id in children:
             child = self._get_node(parent_task, child_id)
             if not child:
                 continue
 
-            rule_async = any(
-                ex
-                for ex in edges_ex
-                if ex.get("to") == child_id and ex.get("mode") == "async" and ex.get("trigger") == "on_batch"
-            )
-            sw = (child.get("io", {}) or {}).get("start_when", "ready")
-            wants_first_batch = str(sw).lower() == "first_batch"
+            trig = self._plan_trigger_kind(parent_task, child_id, parent_node_id)  # may be None
+            wants_first_batch = str((child.get("io", {}) or {}).get("start_when", "ready")).lower() == "first_batch"
 
-            if not (rule_async or wants_first_batch):
-                continue
+            if trigger_kind == "on_batch":
+                rule_async = trig == "on_batch"
+                if not (rule_async or wants_first_batch):
+                    continue
 
-            q = {
-                "id": task_id,
-                "graph.nodes": {
-                    "$elemMatch": {
-                        "node_id": child_id,
-                        "status": {"$in": [RunState.queued, RunState.deferred]},
-                        "streaming.started_on_first_batch": {"$ne": True},
-                    }
-                },
-            }
-            res = await self.db.tasks.find_one_and_update(
-                q,
-                {"$set": {"graph.nodes.$.streaming.started_on_first_batch": True, "graph.nodes.$.next_retry_at_ms": 0}},
-            )
-            if res:
-                fresh = await self.db.tasks.find_one({"id": task_id}, {"id": 1, "graph": 1})
+                # One-time flag to avoid multiple starts on many batches
+                q = {
+                    "id": task_id,
+                    "graph.nodes": {
+                        "$elemMatch": {
+                            "node_id": child_id,
+                            "status": {"$in": [RunState.queued, RunState.deferred]},
+                            "streaming.started_on_first_batch": {"$ne": True},
+                        }
+                    },
+                }
+                res = await self.db.tasks.find_one_and_update(
+                    q,
+                    {
+                        "$set": {
+                            "graph.nodes.$.streaming.started_on_first_batch": True,
+                            "graph.nodes.$.next_retry_at_ms": 0,
+                        }
+                    },
+                )
+                if not res:
+                    continue
+
+                fresh = await self.db.tasks.find_one({"id": task_id}, _TASK_PROJ_PLAN)
                 ch_node = self._get_node(fresh, child_id) if fresh else None
-                if fresh and ch_node:
-                    if rule_async:
+                if not (fresh and ch_node):
+                    continue
+
+                # Preserve historical behavior:
+                # - plan says on_batch → skip readiness check (low latency)
+                # - only io.start_when=first_batch → still check readiness
+                if rule_async:
+                    await self._preflight_and_maybe_start(fresh, ch_node)
+                else:
+                    if await self._node_ready(fresh, ch_node):
                         await self._preflight_and_maybe_start(fresh, ch_node)
-                    else:
-                        if await self._node_ready(fresh, ch_node):
-                            await self._preflight_and_maybe_start(fresh, ch_node)
+
+            elif trigger_kind == "on_done":
+                if trig != "on_done":
+                    continue
+                # Fresh snapshot before checking readiness to reduce TOCTOU races
+                fresh = await self.db.tasks.find_one({"id": task_id}, _TASK_PROJ_PLAN)
+                ch_node = self._get_node(fresh, child_id) if fresh else None
+                if not (fresh and ch_node):
+                    continue
+                if await self._node_ready(fresh, ch_node):
+                    await self._preflight_and_maybe_start(fresh, ch_node)
+            else:
+                # unknown trigger kind — ignore gracefully
+                self.log.debug(
+                    "children.trigger.unknown",
+                    event="coord.children.trigger_unknown",
+                    parent_id=parent_node_id,
+                    child_id=child_id,
+                    trigger_kind=trigger_kind,
+                    plan_trig=trig,
+                )
+                continue
 
     async def _on_batch_ok(self, env: Envelope) -> None:
         p = EvBatchOk.model_validate(env.payload)
@@ -994,9 +1201,9 @@ class Coordinator:
         with swallow(
             logger=self.log, code="children.first_batch", msg="children start check failed", level=logging.WARNING
         ):
-            tdoc = await self.db.tasks.find_one({"id": env.task_id}, {"id": 1, "graph": 1})
+            tdoc = await self.db.tasks.find_one({"id": env.task_id}, _TASK_PROJ_PLAN)
             if tdoc:
-                await self._maybe_start_children_on_first_batch(tdoc, env.node_id)
+                await self._maybe_start_children(tdoc, env.node_id, trigger_kind="on_batch")
 
     async def _on_batch_failed(self, env: Envelope) -> None:
         p = EvBatchFailed.model_validate(env.payload)
@@ -1071,6 +1278,14 @@ class Coordinator:
             {"id": env.task_id, "graph.nodes.node_id": env.node_id},
             {"$set": {"graph.nodes.$.status": RunState.finished, "graph.nodes.$.finished_at": self.clock.now_dt()}},
         )
+
+        # Quick path: start children with on_done trigger without waiting for the scheduler tick
+        with swallow(
+            logger=self.log, code="children.on_done", msg="children start on_done failed", level=logging.WARNING
+        ):
+            tdoc = await self.db.tasks.find_one({"id": env.task_id}, _TASK_PROJ_PLAN)
+            if tdoc:
+                await self._maybe_start_children(tdoc, env.node_id, trigger_kind="on_done")
 
     async def _on_task_failed(self, env: Envelope) -> None:
         p = EvTaskFailed.model_validate(env.payload)
@@ -1248,12 +1463,18 @@ class Coordinator:
         await self.clock.sleep_ms(self.cfg.cancel_grace_ms)
 
     async def _resume_inflight(self) -> None:
+        """
+        One-shot scan at startup for tasks that might need adoption/resume.
+        Currently a no-op placeholder, but we keep a trace to make it explicit.
+        """
+        cnt = 0
         cur = self.db.tasks.find(
             {"status": {"$in": [RunState.running, RunState.deferred, RunState.queued]}},
-            {"id": 1, "graph": 1, "status": 1},
+            {"id": 1},
         )
         async for _ in cur:
-            pass
+            cnt += 1
+        self.log.debug("resume.scan.done", event="coord.resume.scan", tasks_seen=cnt)
 
     async def cancel_task(self, task_id: str, *, reason: str = "user_request") -> bool:
         doc = await self.db.tasks.find_one({"id": task_id}, {"id": 1, "graph": 1, "status": 1})
