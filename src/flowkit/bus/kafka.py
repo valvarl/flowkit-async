@@ -1,44 +1,57 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
-from ..core.config import CoordinatorConfig
-from ..core.utils import loads
+from ..core.log import get_logger, swallow
+from ..core.utils import dumps, loads
 from ..protocol.messages import Envelope
 
 
 class KafkaBus:
     """
     Thin wrapper around AIOKafka with a minimal reply correlator (by corr_id).
+    Config-agnostic: knows only 'bootstrap' and (de)serialization.
     """
 
-    def __init__(self, cfg: CoordinatorConfig) -> None:
-        self.cfg = cfg
+    def __init__(self, bootstrap: str) -> None:
+        self.bootstrap = bootstrap
         self._producer: AIOKafkaProducer | None = None
         self._consumers: list[AIOKafkaConsumer] = []
         self._replies: dict[str, list[Envelope]] = {}
         self._reply_events: dict[str, asyncio.Event] = {}
-        self.bootstrap = cfg.kafka_bootstrap
+        self.log = get_logger("bus.kafka")
 
     async def start(self) -> None:
         self._producer = AIOKafkaProducer(
             bootstrap_servers=self.bootstrap,
-            value_serializer=lambda x: x,  # we pass already-encoded bytes
+            value_serializer=dumps,
             enable_idempotence=True,
         )
         await self._producer.start()
 
     async def stop(self) -> None:
         for c in self._consumers:
-            try:
+            with swallow(
+                logger=self.log,
+                code="bus.kafka.consumer.stop",
+                msg="consumer stop failed",
+                level=logging.WARNING,
+                expected=True,
+            ):
                 await c.stop()
-            except Exception:
-                pass
         self._consumers.clear()
         if self._producer:
-            await self._producer.stop()
+            with swallow(
+                logger=self.log,
+                code="bus.kafka.producer.stop",
+                msg="producer stop failed",
+                level=logging.WARNING,
+                expected=True,
+            ):
+                await self._producer.stop()
         self._producer = None
 
     async def new_consumer(self, topics: list[str], group_id: str, *, manual_commit: bool = True) -> AIOKafkaConsumer:
@@ -46,7 +59,7 @@ class KafkaBus:
             *topics,
             bootstrap_servers=self.bootstrap,
             group_id=group_id,
-            value_deserializer=lambda b: loads(b),
+            value_deserializer=loads,
             enable_auto_commit=not manual_commit,
             auto_offset_reset="latest",
         )
@@ -54,15 +67,11 @@ class KafkaBus:
         self._consumers.append(c)
         return c
 
-    # topics
-    def topic_cmd(self, step_type: str) -> str:
-        return self.cfg.topic_cmd(step_type)
-
-    def topic_status(self, step_type: str) -> str:
-        return self.cfg.topic_status(step_type)
-
-    # ---- raw send (used by OutboxDispatcher)
-    async def _raw_send(self, topic: str, key: bytes, env: Envelope) -> None:
+    # ---- send
+    async def send(self, topic: str, key: bytes | None, env: Envelope) -> None:
+        """
+        Public send: accepts Envelope, applies serializer configured in producer.
+        """
         if self._producer is None:
             raise RuntimeError("KafkaBus producer is not initialized")
         await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)

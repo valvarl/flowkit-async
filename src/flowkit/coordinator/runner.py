@@ -69,7 +69,7 @@ class Coordinator:
             self.cfg.worker_types = list(worker_types)
 
         self.clock: Clock = clock or SystemClock()
-        self.bus = KafkaBus(self.cfg)
+        self.bus = KafkaBus(self.cfg.kafka_bootstrap)
         self.outbox = OutboxDispatcher(db=db, bus=self.bus, cfg=self.cfg, clock=self.clock)
         self.adapters = adapters or dict(default_adapters(db=db, clock=self.clock, detector=sensitive_detector))
 
@@ -189,7 +189,7 @@ class Coordinator:
         self._spawn(self._run_announce_consumer(self._announce_consumer))
 
         for t in self.cfg.worker_types:
-            topic = self.bus.topic_status(t)
+            topic = self.cfg.topic_status(t)
             c = await self.bus.new_consumer([topic], group_id=f"{self._gid}.status.{t}", manual_commit=True)
             self._status_consumers[t] = c
             self._spawn(self._run_status_consumer(t, c))
@@ -746,7 +746,7 @@ class Coordinator:
 
     # ---- enqueue helpers
     async def _enqueue_cmd(self, env: Envelope) -> None:
-        topic = self.bus.topic_cmd(env.step_type)
+        topic = self.cfg.topic_cmd(env.step_type)
         key = f"{env.task_id}:{env.node_id}"
         await self.outbox.enqueue(topic=topic, key=key, env=env)
 

@@ -7,12 +7,13 @@ import uuid
 from collections import OrderedDict
 from typing import Any
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer
 
+from ..bus.kafka import KafkaBus
 from ..core.config import WorkerConfig
 from ..core.log import bind_context, get_logger, log_context, swallow, warn_once
 from ..core.time import Clock, SystemClock
-from ..core.utils import dumps, loads, stable_hash
+from ..core.utils import stable_hash
 from ..io.validation import normalize_adapter_args, validate_input_adapter
 from ..protocol.messages import (
     CmdTaskCancel,
@@ -71,7 +72,7 @@ class Worker:
             self.handlers.setdefault("echo", EchoHandler())
 
         # Kafka
-        self._producer: AIOKafkaProducer | None = None
+        self.bus = KafkaBus(self.cfg.kafka_bootstrap)
         self._cmd_consumers: dict[str, AIOKafkaConsumer] = {}
         self._query_consumer: AIOKafkaConsumer | None = None
         self._signals_consumer: AIOKafkaConsumer | None = None
@@ -110,10 +111,7 @@ class Worker:
         self.log.debug("worker.start", event="worker.start", cfg=cfg_dump)
 
         await self._ensure_indexes()
-        self._producer = AIOKafkaProducer(
-            bootstrap_servers=self.cfg.kafka_bootstrap, value_serializer=dumps, enable_idempotence=True
-        )
-        await self._producer.start()
+        await self.bus.start()
 
         await self.state.refresh()
         self.active = self.state.read_active()
@@ -136,40 +134,24 @@ class Worker:
         # command consumers per role
         for role in self.cfg.roles:
             topic = self.cfg.topic_cmd(role)
-            c = AIOKafkaConsumer(
-                topic,
-                bootstrap_servers=self.cfg.kafka_bootstrap,
-                value_deserializer=loads,
-                enable_auto_commit=False,
-                auto_offset_reset="latest",
+            c = await self.bus.new_consumer(
+                [topic],
                 group_id=f"workers.{role}.v1",
+                manual_commit=True,
             )
-            await c.start()
             self._cmd_consumers[role] = c
             self._spawn(self._cmd_loop(role, c))
 
         # query consumer (discovery)
-        self._query_consumer = AIOKafkaConsumer(
-            self.cfg.topic_query,
-            bootstrap_servers=self.cfg.kafka_bootstrap,
-            value_deserializer=loads,
-            enable_auto_commit=False,
-            auto_offset_reset="latest",
-            group_id="workers.query.v1",
+        self._query_consumer = await self.bus.new_consumer(
+            [self.cfg.topic_query], group_id="workers.query.v1", manual_commit=True
         )
-        await self._query_consumer.start()
         self._spawn(self._query_loop(self._query_consumer))
 
         # signals consumer (control plane; unique group per worker)
-        self._signals_consumer = AIOKafkaConsumer(
-            self.cfg.topic_signals,
-            bootstrap_servers=self.cfg.kafka_bootstrap,
-            value_deserializer=loads,
-            enable_auto_commit=False,
-            auto_offset_reset="latest",
-            group_id=f"workers.signals.{self.worker_id}",
+        self._signals_consumer = await self.bus.new_consumer(
+            [self.cfg.topic_signals], group_id=f"workers.signals.{self.worker_id}", manual_commit=True
         )
-        await self._signals_consumer.start()
         self._spawn(self._signals_loop(self._signals_consumer))
 
         # periodic announce
@@ -191,39 +173,15 @@ class Worker:
             t.cancel()
         self._main_tasks.clear()
 
-        if self._query_consumer:
-            with swallow(
-                logger=self.log,
-                code="worker.query_consumer.stop",
-                msg="query consumer stop failed",
-                level=logging.WARNING,
-            ):
-                await self._query_consumer.stop()
-        if self._signals_consumer:
-            with swallow(
-                logger=self.log,
-                code="worker.signals_consumer.stop",
-                msg="signals consumer stop failed",
-                level=logging.WARNING,
-            ):
-                await self._signals_consumer.stop()
-        for c in self._cmd_consumers.values():
-            with swallow(
-                logger=self.log, code="worker.cmd_consumer.stop", msg="cmd consumer stop failed", level=logging.WARNING
-            ):
-                await c.stop()
+        # try to announce offline before shutting down bus
+        with swallow(
+            logger=self.log, code="worker.announce.offline", msg="announce offline failed", level=logging.WARNING
+        ):
+            await self._send_announce(EventKind.WORKER_OFFLINE, extra={"worker_id": self.worker_id})
+        await self.bus.stop()
         self._cmd_consumers.clear()
-
-        if self._producer:
-            with swallow(
-                logger=self.log, code="worker.announce.offline", msg="announce offline failed", level=logging.WARNING
-            ):
-                await self._send_announce(EventKind.WORKER_OFFLINE, extra={"worker_id": self.worker_id})
-            with swallow(
-                logger=self.log, code="worker.producer.stop", msg="producer stop failed", level=logging.WARNING
-            ):
-                await self._producer.stop()
-        self._producer = None
+        self._query_consumer = None
+        self._signals_consumer = None
 
     def _spawn(self, coro, *, name: str | None = None) -> None:
         t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
@@ -247,15 +205,11 @@ class Worker:
 
     # ---------- Kafka send helpers ----------
     async def _send_status(self, role: str, env: Envelope) -> None:
-        if self._producer is None:
-            raise RuntimeError("KafkaBus producer is not initialized")
         topic = self.cfg.topic_status(role)
         key = f"{env.task_id}:{env.node_id}".encode()
-        await self._producer.send_and_wait(topic, env.model_dump(mode="json"), key=key)
+        await self.bus.send(topic, key, env)
 
     async def _send_announce(self, kind: EventKind, extra: dict[str, Any]) -> None:
-        if self._producer is None:
-            raise RuntimeError("KafkaBus producer is not initialized")
         payload = {"kind": kind, **extra}
         now_ms = self.clock.now_ms()
         env = Envelope(
@@ -269,13 +223,11 @@ class Worker:
             ts_ms=now_ms,
             payload=payload,
         )
-        await self._producer.send_and_wait(self.cfg.topic_worker_announce, env.model_dump(mode="json"))
+        await self.bus.send(self.cfg.topic_worker_announce, None, env)
 
     async def _send_reply(self, env: Envelope) -> None:
-        if self._producer is None:
-            raise RuntimeError("KafkaBus producer is not initialized")
         key = (env.task_id or "*").encode("utf-8")
-        await self._producer.send_and_wait(self.cfg.topic_reply, env.model_dump(mode="json"), key=key)
+        await self.bus.send(self.cfg.topic_reply, key, env)
 
     # ---------- Dedup for incoming commands ----------
     async def _seen_or_add(self, dedup_id: str) -> bool:

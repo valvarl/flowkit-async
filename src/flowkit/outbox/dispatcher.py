@@ -51,7 +51,7 @@ class OutboxDispatcher:
                 async for ob in cur:
                     try:
                         env = Envelope.model_validate(ob["envelope"])
-                        await self.bus._raw_send(ob["topic"], ob["key"].encode("utf-8"), env)
+                        await self.bus.send(ob["topic"], ob["key"].encode("utf-8"), env)
                         _flt = {"_id": ob["_id"]} if ob.get("_id") is not None else {"fp": ob.get("fp")}
                         await self.db.outbox.update_one(
                             _flt,
