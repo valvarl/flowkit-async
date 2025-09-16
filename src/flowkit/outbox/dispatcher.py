@@ -5,7 +5,7 @@ import asyncio
 from ..bus.kafka import KafkaBus
 from ..core.config import CoordinatorConfig
 from ..core.time import Clock, SystemClock
-from ..core.utils import stable_hash
+from ..core.utils import jitter_ms, stable_hash
 from ..protocol.messages import Envelope
 
 
@@ -84,11 +84,7 @@ class OutboxDispatcher:
                             backoff_ms = min(
                                 self.cfg.outbox_backoff_max_ms, max(self.cfg.outbox_backoff_min_ms, (2**attempts) * 100)
                             )
-                            # light jitter without RNG dep injection
-                            import random
-
-                            delta = int(backoff_ms * 0.2)
-                            backoff_ms = max(0, backoff_ms + random.randint(-delta, +delta))
+                            backoff_ms = jitter_ms(backoff_ms)
                             _flt = {"_id": ob.get("_id")} if ob.get("_id") is not None else {"fp": ob.get("fp")}
                             await self.db.outbox.update_one(
                                 _flt,

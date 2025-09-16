@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from secrets import randbelow
 from typing import Any
 
 
@@ -19,7 +20,8 @@ def loads(b: bytes) -> Any:
 
 
 def jitter_ms(base_ms: int) -> int:
-    import random
-
-    delta = int(base_ms * 0.2)
-    return max(0, base_ms + random.randint(-delta, +delta))
+    delta = max(0, int(base_ms * 0.2))
+    if delta == 0:
+        return max(0, base_ms)
+    # rand in [-delta, +delta]
+    return max(0, base_ms + (randbelow(2 * delta + 1) - delta))
