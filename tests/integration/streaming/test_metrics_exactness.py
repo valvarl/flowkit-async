@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, prime_graph, wait_task_finished
+from tests.helpers.graph import wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 from ._helpers import _get_count, _make_indexer
@@ -38,11 +38,8 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
                 "input_args": {"from_nodes": ["u"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
@@ -68,7 +65,6 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
     )
 
     totals = {"u1": 6, "u2": 7, "u3": 9}  # sum = 22
-    from ._helpers import _make_indexer
 
     u1 = _make_indexer("u1", total=totals["u1"], batch=3)
     u2 = _make_indexer("u2", total=totals["u2"], batch=4)
@@ -86,11 +82,8 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
                 "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 20},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u1, u2, u3, d], edges=[("u1", "d"), ("u2", "d"), ("u3", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
@@ -128,11 +121,8 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
                 "input_args": {"from_nodes": ["u"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)

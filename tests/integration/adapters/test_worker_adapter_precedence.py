@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_task_finished
 from tests.helpers.handlers import build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -64,8 +64,6 @@ async def test_cmd_input_inline_overrides_handler_load_input(env_and_imports, in
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 3, "total_skus": 6}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     u2 = {
         "node_id": "u2",
@@ -73,8 +71,6 @@ async def test_cmd_input_inline_overrides_handler_load_input(env_and_imports, in
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 1, "total_skus": 0}},
-        "status": None,
-        "attempt_epoch": 0,
     }
 
     probe = {
@@ -94,12 +90,9 @@ async def test_cmd_input_inline_overrides_handler_load_input(env_and_imports, in
                 },
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = make_graph(nodes=[u, u2, probe], edges=[("u", "probe"), ("u2", "probe")], agg={"after": "probe"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, u2, probe]}
 
     task_id = await coord.create_task(params={}, graph=graph)
 

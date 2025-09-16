@@ -1,3 +1,4 @@
+# tests/test_cancel_and_restart.py
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +11,7 @@ import pytest_asyncio
 
 from flowkit.core.utils import stable_hash
 from tests.helpers import BROKER, AIOKafkaConsumerMock
-from tests.helpers.graph import prime_graph, wait_node_running, wait_task_finished
+from tests.helpers.graph import wait_node_running, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_flaky_once_handler, build_indexer_handler
 
 # Ограничиваем роли для ускорения/избежания лишних handler'ов
@@ -49,8 +50,6 @@ def graph_cancel_flow() -> dict:
                 },
             },
         ],
-        "edges": [["w1", "w2"]],
-        "edges_ex": [{"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"}],
     }
 
 
@@ -68,7 +67,6 @@ def graph_restart_flaky() -> dict:
                 "io": {"input_inline": {}},
             }
         ],
-        "edges": [],
     }
 
 
@@ -107,7 +105,7 @@ async def test_cascade_cancel_prevents_downstream(env_and_imports, inmemory_db, 
     if cancel_method is None:
         pytest.xfail("Coordinator cancel API is not implemented")
 
-    g = prime_graph(cd, graph_cancel_flow())
+    g = graph_cancel_flow()
     tid = await coord.create_task(params={}, graph=g)
     tlog.debug("task.created", event="task.created", test_name="cascade_cancel_prevents_downstream", task_id=tid)
 
@@ -171,7 +169,7 @@ async def test_restart_higher_epoch_ignores_old_events(env_and_imports, inmemory
     After accepting epoch>=1, re-inject an old event (epoch=0). Coordinator must ignore it by fencing.
     """
     cd, _ = env_and_imports
-    g = prime_graph(cd, graph_restart_flaky())
+    g = graph_restart_flaky()
     tid = await coord.create_task(params={}, graph=g)
     tlog.debug("task.created", event="task.created", test_name="restart_higher_epoch_ignores_old_events", task_id=tid)
 
@@ -232,36 +230,31 @@ async def test_cancel_before_any_start_keeps_all_nodes_idle(env_and_imports, inm
     """Cancel the task before any node can start: no node must enter 'running'."""
     cd, _ = env_and_imports
 
-    g = prime_graph(
-        cd,
-        {
-            "schema_version": "1.0",
-            "nodes": [
-                {
-                    "node_id": "w1",
-                    "type": "indexer",
-                    "depends_on": ["__missing__"],  # prevents start
-                    "fan_in": "all",
-                    "io": {"input_inline": {"batch_size": 5, "total_skus": 10}},
-                },
-                {
-                    "node_id": "w2",
-                    "type": "analyzer",
-                    "depends_on": ["w1"],
-                    "fan_in": "any",
-                    "io": {
-                        "start_when": "first_batch",
-                        "input_inline": {
-                            "input_adapter": "pull.from_artifacts",
-                            "input_args": {"from_nodes": ["w1"], "poll_ms": 30, "meta_list_key": "skus"},
-                        },
+    g = {
+        "schema_version": "1.0",
+        "nodes": [
+            {
+                "node_id": "w1",
+                "type": "indexer",
+                "depends_on": ["__missing__"],  # prevents start
+                "fan_in": "all",
+                "io": {"input_inline": {"batch_size": 5, "total_skus": 10}},
+            },
+            {
+                "node_id": "w2",
+                "type": "analyzer",
+                "depends_on": ["w1"],
+                "fan_in": "any",
+                "io": {
+                    "start_when": "first_batch",
+                    "input_inline": {
+                        "input_adapter": "pull.from_artifacts",
+                        "input_args": {"from_nodes": ["w1"], "poll_ms": 30, "meta_list_key": "skus"},
                     },
                 },
-            ],
-            "edges": [["w1", "w2"]],
-            "edges_ex": [{"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"}],
-        },
-    )
+            },
+        ],
+    }
 
     # Find cancel API
     cancel_method = None
@@ -301,7 +294,7 @@ async def test_cancel_on_deferred_prevents_retry(env_and_imports, inmemory_db, c
 
     base = graph_restart_flaky()
     base["nodes"][0]["retry_policy"]["backoff_sec"] = 1.0  # tweak backoff
-    g = prime_graph(cd, base)
+    g = base
 
     # Find cancel API
     cancel_method = None
@@ -369,7 +362,7 @@ async def test_restart_higher_epoch_ignores_old_batch_ok(env_and_imports, inmemo
     from a lower epoch. Also ensure injected stale event doesn't create duplicate metrics.
     """
     cd, _ = env_and_imports
-    g = prime_graph(cd, graph_restart_flaky())
+    g = graph_restart_flaky()
     tid = await coord.create_task(params={}, graph=g)
     tlog.debug("task.created", event="task.created", test_name="restart_higher_epoch_ignores_old_batch_ok", task_id=tid)
 

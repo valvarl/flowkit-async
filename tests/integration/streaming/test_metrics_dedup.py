@@ -7,7 +7,7 @@ import inspect
 
 import pytest
 from tests.helpers import BROKER, AIOKafkaProducerMock
-from tests.helpers.graph import make_graph, prime_graph, wait_task_finished
+from tests.helpers.graph import wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -64,11 +64,8 @@ async def test_metrics_idempotent_on_duplicate_status_events(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
@@ -137,11 +134,8 @@ async def test_status_out_of_order_does_not_break_aggregation(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
@@ -214,11 +208,8 @@ async def test_metrics_dedup_persists_across_coord_restart(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):

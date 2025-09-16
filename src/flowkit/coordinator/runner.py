@@ -534,6 +534,7 @@ class Coordinator:
         ii = (io.get("input_inline") or {}) if isinstance(io.get("input_inline"), dict) else {}
         adapter = ii.get("input_adapter")
         args = (ii.get("input_args") or {}) if isinstance(ii.get("input_args"), dict) else {}
+        start_when = str(io.get("start_when", "ready")).lower()
 
         parents = self._plan_parents(task_doc, node["node_id"])
         # Fallback: if plan is absent, use depends_on from the runtime graph
@@ -556,7 +557,7 @@ class Coordinator:
             return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": from_nodes}}
 
         # No explicit adapter → auto-build if parents exist
-        if parents:
+        if parents and start_when != "first_batch":
             adapter = "pull.from_artifacts"
             from_nodes, kwargs_norm = normalize_adapter_args({"from_nodes": parents})
             ok, why = validate_input_adapter(

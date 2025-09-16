@@ -1,3 +1,4 @@
+# tests/test_reliability_failures.py
 """
 Tests around source-like roles: idempotent metrics, retries, fencing, coordinator
 restart adoption, cascade cancel, and heartbeat/lease updates.
@@ -17,7 +18,7 @@ import pytest
 from flowkit.core.log import log_context
 from flowkit.protocol.messages import Envelope, EventKind, MsgType, Role
 from tests.helpers import status_topic
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_task_finished, wait_task_status
+from tests.helpers.graph import node_by_id, wait_task_finished, wait_task_status
 from tests.helpers.handlers import (
     build_cancelable_source_handler,
     build_counting_source_handler,
@@ -59,14 +60,21 @@ async def test_idempotent_metrics_on_duplicate_events(
 
     monkeypatch.setattr("tests.helpers.kafka.AIOKafkaProducerMock.send_and_wait", dup_status, raising=True)
 
-    graph = make_graph(
-        nodes=[
+    # Declarative GraphSpec: nodes-only
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [
             {"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}},
+            {
+                "node_id": "agg",
+                "type": "coordinator_fn",
+                "depends_on": ["s"],
+                "fan_in": "all",
+                "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "s", "mode": "sum"}},
+            },
         ],
-        edges=[],
-        agg={"after": "s", "node_id": "agg", "mode": "sum"},
-    )
-    graph = prime_graph(cd, graph)
+    }
+
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")
@@ -90,8 +98,9 @@ async def test_transient_failure_deferred_then_retry(env_and_imports, inmemory_d
     # Flaky role: first batch fails transiently, then succeeds.
     await worker_factory(("flaky", build_flaky_once_handler(db=inmemory_db)))
 
-    graph = make_graph(
-        nodes=[
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [
             {
                 "node_id": "f",
                 "type": "flaky",
@@ -101,9 +110,7 @@ async def test_transient_failure_deferred_then_retry(env_and_imports, inmemory_d
                 "io": {"input_inline": {}},
             }
         ],
-        edges=[],
-    )
-    graph = prime_graph(cd, graph)
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")
@@ -138,15 +145,14 @@ async def test_permanent_fail_cascades_cancel_and_task_failed(
         ("c", build_noop_handler(db=inmemory_db, role="c")),
     )
 
-    graph = make_graph(
-        nodes=[
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [
             {"node_id": "a", "type": "a", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}},
             {"node_id": "b", "type": "b", "depends_on": ["a"], "fan_in": "all", "io": {"input_inline": {}}},
             {"node_id": "c", "type": "c", "depends_on": ["a"], "fan_in": "all", "io": {"input_inline": {}}},
         ],
-        edges=[("a", "b"), ("a", "c")],
-    )
-    graph = prime_graph(cd, graph)
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")
@@ -176,11 +182,10 @@ async def test_status_fencing_ignores_stale_epoch(env_and_imports, inmemory_db, 
 
     await worker_factory(("source", build_counting_source_handler(db=inmemory_db, total=9, batch=3)))
 
-    graph = make_graph(
-        nodes=[{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-        edges=[],
-    )
-    graph = prime_graph(cd, graph)
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")
@@ -234,11 +239,12 @@ async def test_coordinator_restart_adopts_inflight_without_new_epoch(
     task_id: str | None = None
     coord2 = None
     try:
-        graph = make_graph(
-            nodes=[{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        )
-        graph = prime_graph(cd, graph)
+        graph = {
+            "schema_version": "1.0",
+            "nodes": [
+                {"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}
+            ],
+        }
         task_id = await coord1.create_task(params={}, graph=graph)
         with log_context(task_id=task_id):
             tlog.debug("test.task.created", event="test.task.created")
@@ -282,11 +288,10 @@ async def test_explicit_cascade_cancel_moves_node_to_deferred(
 
     await worker_factory(("source", build_cancelable_source_handler(db=inmemory_db, total=100, batch=10, delay=0.3)))
 
-    graph = make_graph(
-        nodes=[{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-        edges=[],
-    )
-    graph = prime_graph(cd, graph)
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")
@@ -328,11 +333,10 @@ async def test_heartbeat_updates_lease_deadline(env_and_imports, inmemory_db, co
 
     await worker_factory(("source", build_slow_source_handler(db=inmemory_db, total=40, batch=4, delay=0.12)))
 
-    graph = make_graph(
-        nodes=[{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-        edges=[],
-    )
-    graph = prime_graph(cd, graph)
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "source", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
         tlog.debug("test.task.created", event="test.task.created")

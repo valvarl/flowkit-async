@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import pytest
 from tests.helpers.graph import (
-    make_graph,
-    prime_graph,
     wait_node_finished,
     wait_node_not_running_for,
     wait_node_running,
@@ -50,12 +48,9 @@ async def test_start_when_first_batch_starts_early(env_and_imports, inmemory_db,
                 "input_args": {"from_nodes": ["u"], "poll_ms": 30},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = make_graph(nodes=[u, d], edges=[("u", "d")])
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="start_when_first_batch_starts_early", task_id=task_id)
@@ -115,11 +110,9 @@ async def test_after_upstream_complete_delays_start(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 30},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = prime_graph(cd, make_graph(nodes=[u, d], edges=[("u", "d")]))
+    graph = {"schema_version": "1.0", "nodes": [u, d]}
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="after_upstream_complete_delays_start", task_id=task_id)
 

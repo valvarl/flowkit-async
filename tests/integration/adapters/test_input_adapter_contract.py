@@ -11,7 +11,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_task_finished, wait_task_status
+from tests.helpers.graph import node_by_id, wait_task_finished, wait_task_status
 from tests.helpers.handlers import build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -67,10 +67,8 @@ async def test_missing_required_args_yields_bad_input_args(env_and_imports, inme
                 "input_args": {"from_nodes": ["u"], "poll_ms": 10},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[probe], edges=[]))
+    g = {"schema_version": "1.0", "nodes": [probe]}
     tid = await coord.create_task(params={}, graph=g)
     await wait_task_status(inmemory_db, tid, RunState.failed.value, timeout=6.0)
     assert guard.iter_called is False
@@ -94,8 +92,6 @@ async def test_empty_upstream_is_not_error(env_and_imports, inmemory_db, coord, 
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 5, "total_skus": 0}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -109,10 +105,8 @@ async def test_empty_upstream_is_not_error(env_and_imports, inmemory_db, coord, 
                 "input_args": {"from_nodes": ["u"], "poll_ms": 20, "size": 3, "meta_list_key": "skus"},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):
@@ -144,8 +138,6 @@ async def test_rechunk_without_meta_list_key_treats_each_artifact_as_single_item
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 4, "total_skus": 8}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -160,11 +152,9 @@ async def test_rechunk_without_meta_list_key_treats_each_artifact_as_single_item
                 "input_args": {"from_nodes": ["u"], "poll_ms": 20, "size": 10},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_task_finished
 from tests.helpers.handlers import build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -34,8 +34,6 @@ async def test_rechunk_without_meta_key_treats_each_artifact_as_one_item(
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": batch, "total_skus": total}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -49,11 +47,9 @@ async def test_rechunk_without_meta_key_treats_each_artifact_as_one_item(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 15, "size": 3},  # ← no meta_list_key
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
     with log_context(task_id=tid):
         tdoc = await wait_task_finished(inmemory_db, tid, timeout=8.0)

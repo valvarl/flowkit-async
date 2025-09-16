@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, prime_graph, wait_task_status
+from tests.helpers.graph import wait_task_status
 
 from flowkit.protocol.messages import RunState
 from flowkit.worker.handlers.base import Batch, RoleHandler  # type: ignore
@@ -36,10 +36,8 @@ async def test_cmd_unknown_adapter_permanent_fail(env_and_imports, inmemory_db, 
                 "input_args": {"poll_ms": 10},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[probe], edges=[]))
+    g = {"schema_version": "1.0", "nodes": [probe]}
     tid = await coord.create_task(params={}, graph=g)
     await wait_task_status(inmemory_db, tid, RunState.failed.value, timeout=6.0)
     assert handler.iter_called is False

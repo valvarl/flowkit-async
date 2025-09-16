@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_node_running, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_node_running, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -46,12 +46,9 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
                 "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 25},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = make_graph(nodes=[u1, u2, u3, d], edges=[("u1", "d"), ("u2", "d"), ("u3", "d")], agg={"after": "d"})
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug(

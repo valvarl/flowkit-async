@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, node_by_id, prime_graph, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_task_finished
 from tests.helpers.handlers import build_indexer_handler
 
 from flowkit.worker.handlers.base import Batch, BatchResult, RoleHandler  # type: ignore
@@ -28,8 +28,6 @@ async def test_empty_upstream_finishes_with_zero_count(env_and_imports, inmemory
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 3, "total_skus": 0}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -43,10 +41,8 @@ async def test_empty_upstream_finishes_with_zero_count(env_and_imports, inmemory
                 "input_args": {"from_nodes": ["u"], "poll_ms": 15},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=8.0)
     assert node_by_id(tdoc, "u")["status"] == cd.RunState.finished

@@ -42,7 +42,6 @@ def setup_env_and_imports(monkeypatch, *, worker_types: str = "indexer,enricher,
     # Replace aiokafka in both bus and worker with in-memory mocks
     monkeypatch.setattr(bus, "AIOKafkaProducer", AIOKafkaProducerMock, raising=True)
     monkeypatch.setattr(bus, "AIOKafkaConsumer", AIOKafkaConsumerMock, raising=True)
-    monkeypatch.setattr(wu, "AIOKafkaProducer", AIOKafkaProducerMock, raising=True)
     monkeypatch.setattr(wu, "AIOKafkaConsumer", AIOKafkaConsumerMock, raising=True)
     LOG.debug("env.kafka.mocked", event="env.kafka.mocked")
 

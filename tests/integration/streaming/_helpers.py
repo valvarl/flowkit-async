@@ -25,8 +25,6 @@ def _make_indexer(node_id: str, total: int, batch: int) -> dict[str, Any]:
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": batch, "total_skus": total}},
-        "status": None,
-        "attempt_epoch": 0,
     }
 
 

@@ -22,7 +22,7 @@ import pytest
 
 from flowkit.core.log import log_context
 from tests.helpers import wait_task_finished
-from tests.helpers.graph import make_graph, node_by_id, prime_graph
+from tests.helpers.graph import node_by_id
 from tests.helpers.handlers import (
     build_flaky_once_handler,
     build_noop_query_only_role,
@@ -44,13 +44,10 @@ async def test_heartbeat_soft_deferred_then_recovers(env_and_imports, inmemory_d
     # Sleepy role: slow processing so heartbeats lag behind soft window.
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=1.6)))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -81,13 +78,10 @@ async def test_heartbeat_hard_marks_task_failed(env_and_imports, inmemory_db, co
 
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=1.2)))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -125,13 +119,10 @@ async def test_resume_inflight_worker_restarts_with_local_state(env_and_imports,
     )
     await w1.start()
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -179,13 +170,10 @@ async def test_task_discover_complete_artifacts_skips_node_start(
 
     await worker_factory(("noop", build_noop_query_only_role(db=inmemory_db, role="noop")))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -213,13 +201,10 @@ async def test_grace_gate_blocks_then_allows_after_window(env_and_imports, inmem
 
     await worker_factory(("noop", build_noop_query_only_role(db=inmemory_db, role="noop")))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -262,22 +247,19 @@ async def test_deferred_retry_ignores_grace_gate(env_and_imports, inmemory_db, c
 
     await worker_factory(("flaky", build_flaky_once_handler(db=inmemory_db)))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[
-                {
-                    "node_id": "f",
-                    "type": "flaky",
-                    "depends_on": [],
-                    "fan_in": "all",
-                    "retry_policy": {"max": 2, "backoff_sec": 0, "permanent_on": []},
-                    "io": {"input_inline": {}},
-                }
-            ],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [
+            {
+                "node_id": "f",
+                "type": "flaky",
+                "depends_on": [],
+                "fan_in": "all",
+                "retry_policy": {"max": 2, "backoff_sec": 0, "permanent_on": []},
+                "io": {"input_inline": {}},
+            }
+        ],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
 
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=6.0)
@@ -304,13 +286,10 @@ async def test_no_task_resumed_on_worker_restart(env_and_imports, inmemory_db, c
     )
     await w1.start()
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
 
     # Wait until running
@@ -352,13 +331,10 @@ async def test_heartbeat_updates_lease_deadline_simple(env_and_imports, inmemory
 
     await worker_factory(("sleepy", build_sleepy_handler(db=inmemory_db, role="sleepy", batches=1, sleep_s=0.8)))
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
 
     # First observed lease
@@ -406,13 +382,10 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
     )
     await w1.start()
 
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "s", "type": "sleepy", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", task_id=task_id)
 
@@ -559,13 +532,10 @@ async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coor
     tlog.debug("test.start", event="test.start", test_name="heartbeat_tolerates_clock_skew")
 
     # Single-node task; manually put node into running/epoch=1
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
-            edges=[],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [{"node_id": "x", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}}],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
     await inmemory_db.tasks.update_one(
         {"id": task_id, "graph.nodes.node_id": "x"},
@@ -628,16 +598,13 @@ async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord,
     tlog.debug("test.start", event="test.start", test_name="lease_expiry_cascades_cancel")
 
     # up -> down
-    graph = prime_graph(
-        cd,
-        make_graph(
-            nodes=[
-                {"node_id": "up", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}},
-                {"node_id": "down", "type": "noop", "depends_on": ["up"], "fan_in": "all", "io": {"input_inline": {}}},
-            ],
-            edges=[("up", "down")],
-        ),
-    )
+    graph = {
+        "schema_version": "1.0",
+        "nodes": [
+            {"node_id": "up", "type": "noop", "depends_on": [], "fan_in": "all", "io": {"input_inline": {}}},
+            {"node_id": "down", "type": "noop", "depends_on": ["up"], "fan_in": "all", "io": {"input_inline": {}}},
+        ],
+    }
     task_id = await coord.create_task(params={}, graph=graph)
 
     # Wait until task is running (scheduler first iteration)

@@ -11,22 +11,22 @@ from flowkit.protocol.messages import RunState
 LOG = get_logger("tests.helpers.graph")
 
 
-def prime_graph(cd, graph: dict[str, Any]) -> dict[str, Any]:
+def prime_graph(cd, spec: dict[str, Any]) -> dict[str, Any]:
     """
-    Normalize graph nodes before submitting to the coordinator:
-    - ensure status is set to queued (supports both enum and raw string)
-    - ensure attempt_epoch/stats/lease are present
+    Normalize *declarative* GraphSpec before submitting to the coordinator:
+    - ensure node.depends_on exists (list)
+    - default fan_in to 'all' if not set
+    - DO NOT inject any runtime fields (status/lease/epoch/starts/etc)
+    Compatible with new spec: nodes-only, no edges/edges_ex at runtime.
     """
-    for n in graph.get("nodes", []):
-        st = n.get("status")
-        if st is None or (isinstance(st, str) and not st.strip()):
-            # Support tests where RunState may be an enum on `cd`, or just strings.
-            rs: Any = getattr(cd, "RunState", None)
-            n["status"] = getattr(rs, "queued", "queued")
-        n.setdefault("attempt_epoch", 0)
-        n.setdefault("stats", {})
-        n.setdefault("lease", {})
-    return graph
+    for n in spec.get("nodes", []):
+        if "depends_on" not in n or n["depends_on"] is None:
+            n["depends_on"] = []
+        if "fan_in" not in n or not n["fan_in"]:
+            n["fan_in"] = "all"
+        # io is optional; leave as-is if provided
+        # no runtime mutations here
+    return spec
 
 
 async def wait_task_finished(db, task_id: str, timeout: float = 10.0) -> dict[str, Any]:  # noqa: ASYNC109

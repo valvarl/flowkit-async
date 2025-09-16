@@ -45,7 +45,7 @@ def _wait_outbox_doc(
 @pytest.mark.asyncio
 async def test_outbox_retry_backoff(env_and_imports, inmemory_db, coord, monkeypatch, tlog):
     """
-    First two _raw_send calls fail → outbox goes to 'retry' with exponential backoff (with jitter),
+    First two send() calls fail → outbox goes to 'retry' with exponential backoff (with jitter),
     then on the 3rd attempt becomes 'sent'.
     """
     cd, _ = env_and_imports
@@ -53,16 +53,16 @@ async def test_outbox_retry_backoff(env_and_imports, inmemory_db, coord, monkeyp
     tlog.debug("test.start", event="test.start", test_name="outbox_retry_backoff", topic=topic, key=key)
 
     attempts: dict[str, int] = {}
-    orig_raw = coord.bus._raw_send
+    orig_send = coord.bus.send
 
-    async def flaky_raw_send(t: str, k: bytes, env):
-        kk = f"{t}:{k.decode()}"
+    async def flaky_send(t: str, k: bytes | None, env):
+        kk = f"{t}:{(k or b'').decode()}"
         attempts[kk] = attempts.get(kk, 0) + 1
         if attempts[kk] <= 2:
             raise RuntimeError("broker temporary down")
-        await orig_raw(t, k, env)
+        await orig_send(t, k, env)
 
-    monkeypatch.setattr(coord.bus, "_raw_send", flaky_raw_send, raising=True)
+    monkeypatch.setattr(coord.bus, "send", flaky_send, raising=True)
 
     env = cd.Envelope(
         msg_type=cd.MsgType.cmd,
@@ -158,15 +158,15 @@ async def test_outbox_exactly_once_fp_uniqueness(env_and_imports, inmemory_db, c
 
     sent_calls: list[tuple[str, str, str]] = []
     sent_evt = asyncio.Event()
-    orig_raw = coord.bus._raw_send
+    orig_send = coord.bus.send
 
-    async def counting_raw_send(t, k, env):
-        sent_calls.append((t, k.decode(), env.dedup_id))
-        if t == topic and k.decode() == key:
+    async def counting_send(t, k, env):
+        sent_calls.append((t, (k or b"").decode(), env.dedup_id))
+        if t == topic and (k or b"").decode() == key:
             sent_evt.set()
-        await orig_raw(t, k, env)
+        await orig_send(t, k, env)
 
-    monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
+    monkeypatch.setattr(coord.bus, "send", counting_send, raising=True)
 
     env1 = cd.Envelope(
         msg_type=cd.MsgType.cmd,
@@ -223,13 +223,13 @@ async def test_outbox_crash_between_send_and_mark_sent(env_and_imports, inmemory
     )
 
     sent_calls: list[tuple[str, str, str]] = []
-    orig_raw = coord.bus._raw_send
+    orig_send = coord.bus.send
 
-    async def counting_raw_send(t, k, env):
-        sent_calls.append((t, k.decode(), getattr(env, "dedup_id", "")))
-        return await orig_raw(t, k, env)
+    async def counting_send(t, k, env):
+        sent_calls.append((t, (k or b"").decode(), getattr(env, "dedup_id", "")))
+        return await orig_send(t, k, env)
 
-    monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
+    monkeypatch.setattr(coord.bus, "send", counting_send, raising=True)
 
     # Broker-side idempotence by (topic, key, dedup_id)
     delivered = set()
@@ -312,13 +312,13 @@ async def test_outbox_dedup_survives_restart(env_and_imports, inmemory_db, coord
     tlog.debug("test.start", event="test.start", test_name="outbox_dedup_survives_restart", topic=topic, key=key)
 
     sent_calls: list[tuple[str, str, str]] = []
-    orig_raw = coord.bus._raw_send
+    orig_send = coord.bus.send
 
-    async def counting_raw_send(t, k, env):
-        sent_calls.append((t, k.decode(), getattr(env, "dedup_id", "")))
-        return await orig_raw(t, k, env)
+    async def counting_send(t, k, env):
+        sent_calls.append((t, (k or b"").decode(), getattr(env, "dedup_id", "")))
+        return await orig_send(t, k, env)
 
-    monkeypatch.setattr(coord.bus, "_raw_send", counting_raw_send, raising=True)
+    monkeypatch.setattr(coord.bus, "send", counting_send, raising=True)
 
     env = cd.Envelope(
         msg_type=cd.MsgType.cmd,
@@ -374,7 +374,7 @@ async def test_outbox_backoff_caps_with_jitter(env_and_imports, inmemory_db, coo
     async def always_fail(t, k, env):
         raise RuntimeError("forced broker failure")
 
-    monkeypatch.setattr(coord.bus, "_raw_send", always_fail, raising=True)
+    monkeypatch.setattr(coord.bus, "send", always_fail, raising=True)
 
     env = cd.Envelope(
         msg_type=cd.MsgType.cmd,
@@ -427,7 +427,7 @@ async def test_outbox_dlq_after_max_retries(env_and_imports, inmemory_db, coord,
     async def always_fail(t, k, env):
         raise RuntimeError("permanent broker failure")
 
-    monkeypatch.setattr(coord.bus, "_raw_send", always_fail, raising=True)
+    monkeypatch.setattr(coord.bus, "send", always_fail, raising=True)
 
     env = cd.Envelope(
         msg_type=cd.MsgType.cmd,

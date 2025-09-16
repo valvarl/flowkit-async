@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 
 from flowkit.core.log import log_context
-from tests.helpers.graph import prime_graph, wait_task_finished
+from tests.helpers.graph import wait_task_finished
 from tests.helpers.handlers import (
     build_analyzer_handler,
     build_enricher_handler,
@@ -117,14 +117,6 @@ def build_graph(*, total_skus=12, batch_size=5, mini_batch=2) -> dict[str, Any]:
                 },
             },
         ],
-        "edges": [["w1", "w2"], ["w2", "w3"], ["w1", "w3"], ["w3", "w4"], ["w2", "w5"], ["w5", "w4"]],
-        # Optional extended-edge hints for async triggers (kept for realism)
-        "edges_ex": [
-            {"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"},
-            {"from": "w2", "to": "w5", "mode": "async", "trigger": "on_batch"},
-            {"from": "w5", "to": "w4", "mode": "async", "trigger": "on_batch"},
-            {"from": "w3", "to": "w4", "mode": "async", "trigger": "on_batch"},
-        ],
     }
 
 
@@ -140,9 +132,6 @@ async def test_e2e_streaming_with_kafka_sim(env_and_imports, inmemory_db, coord,
 
     graph = build_graph(total_skus=12, batch_size=5, mini_batch=3)
     tlog.debug("test.graph.built", event="test.graph.built", nodes=len(graph["nodes"]))
-
-    graph = prime_graph(cd, graph)
-    tlog.debug("test.graph.primed", event="test.graph.primed")
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("test.task.created", event="test.task.created", task_id=task_id)

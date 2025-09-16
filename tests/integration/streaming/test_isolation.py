@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, prime_graph, wait_task_finished
+from tests.helpers.graph import wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 from flowkit.core.log import log_context
@@ -40,11 +40,8 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
                     "input_args": {"from_nodes": ["u"], "poll_ms": 25},
                 },
             },
-            "status": None,
-            "attempt_epoch": 0,
         }
-        g = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-        g = prime_graph(cd, g)
+        g = {"schema_version": "1.0", "nodes": [u, d]}
         tid = await coord.create_task(params={}, graph=g)
         with log_context(task_id=tid):
             tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
@@ -89,14 +86,11 @@ async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, wor
                     "input_args": {"from_nodes": ["u"], "poll_ms": 20},
                 },
             },
-            "status": None,
-            "attempt_epoch": 0,
         }
-        g = make_graph(nodes=[u, d], edges=[("u", "d")], agg={"after": "d"})
-        return g
+        return {"schema_version": "1.0", "nodes": [u, d]}
 
-    g1 = prime_graph(cd, build_graph(15, 5))
-    g2 = prime_graph(cd, build_graph(21, 4))
+    g1 = build_graph(15, 5)
+    g2 = build_graph(21, 4)
 
     # Start both tasks back-to-back to ensure real overlap on topics.
     t1 = await coord.create_task(params={}, graph=g1)

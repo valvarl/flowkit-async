@@ -6,18 +6,20 @@ Covers:
   - ANY fan-in: downstream starts as soon as any parent streams a first batch.
   - ALL fan-in: downstream starts only after all parents are done (no start_when).
   - COUNT:N fan-in: xfail placeholder until the coordinator supports it.
-  - Edges vs routing priority: xfail placeholder for precedence logic.
+  - Edges vs routing priority: xfail placeholder for precedence logic (adapted to depends_on).
   - coordinator_fn merge: runs without a worker and feeds downstream via artifacts.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 import pytest_asyncio
 
 from flowkit.core.log import log_context
 from tests.helpers import BROKER
-from tests.helpers.graph import node_by_id, prime_graph, wait_node_running, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_node_running, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Only the roles required by this module
@@ -33,7 +35,7 @@ async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory,
     Minimal worker set for fan-in scenarios:
       - one 'indexer' worker (processes all upstream indexer nodes sequentially)
       - one 'analyzer' worker (downstream consumer)
-    Handlers come from conftest.handlers (already DB-injected).
+    Handlers come from helpers (already DB-injected).
     """
     tlog.debug("fixture.start", event="fixture.start", fixture="workers_indexer_analyzer")
     await worker_factory(
@@ -49,16 +51,14 @@ async def workers_indexer_analyzer(env_and_imports, inmemory_db, worker_factory,
 # ───────────────────────── Helpers (local builders only) ─────────────────────────
 
 
-def _make_indexer_node(node_id: str, total: int, batch: int):
-    """Synthetic upstream indexer node with inline input and no deps."""
+def _make_indexer_node(node_id: str, total: int, batch: int) -> dict:
+    """Synthetic upstream indexer node with inline input and no deps (declarative spec: nodes-only)."""
     return {
         "node_id": node_id,
         "type": "indexer",
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": batch, "total_skus": total}},
-        "status": None,
-        "attempt_epoch": 0,
     }
 
 
@@ -91,16 +91,10 @@ async def test_fanin_any_starts_early(env_and_imports, inmemory_db, coord, worke
                 "input_args": {"from_nodes": ["u1", "u2", "u3"], "poll_ms": 40},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [u1, u2, u3, d_any],
-        "edges": [["u1", "d_any"], ["u2", "d_any"], ["u3", "d_any"]],
-    }
-    graph = prime_graph(cd, graph)
+    # Declarative GraphSpec: nodes-only (no edges, no runtime fields)
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d_any]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="fanin_any_starts_early", task_id=task_id)
@@ -146,12 +140,9 @@ async def test_fanin_all_waits_all_parents(env_and_imports, inmemory_db, coord, 
                 "input_args": {"from_nodes": ["a", "b"], "poll_ms": 40},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {"schema_version": "1.0", "nodes": [a, b, d_all], "edges": [["a", "d_all"], ["b", "d_all"]]}
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [a, b, d_all]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="fanin_all_waits_all_parents", task_id=task_id)
@@ -197,16 +188,9 @@ async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexe
                 "input_args": {"from_nodes": ["p1", "p2", "p3"], "poll_ms": 40},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [p1, p2, p3, d_cnt],
-        "edges": [["p1", "d_cnt"], ["p2", "d_cnt"], ["p3", "d_cnt"]],
-    }
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [p1, p2, p3, d_cnt]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="fanin_count_n", task_id=task_id)
@@ -226,19 +210,19 @@ async def test_fanin_count_n(env_and_imports, inmemory_db, coord, workers_indexe
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Edges vs routing priority not implemented/covered yet", strict=False)
+@pytest.mark.xfail(reason="Routing precedence vs explicit depends_on not implemented/covered yet", strict=False)
 async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, workers_indexer_analyzer, tlog):
     """
-    If explicit graph edges are present and a node also has routing.on_success,
-    edges should take precedence (routing target should not run).
+    If a node has an explicit depends_on child and also declares routing.on_success,
+    the explicit dependency should take precedence (routing target should not run).
     """
     cd, _ = env_and_imports
     tlog.debug("test.start", event="test.start", test_name="edges_vs_routing_priority")
 
     src = _make_indexer_node("src", total=3, batch=3)
 
-    only_edges = {
-        "node_id": "only_edges",
+    only_depends = {
+        "node_id": "only_depends",
         "type": "analyzer",
         "depends_on": ["src"],
         "fan_in": "all",
@@ -248,13 +232,11 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
                 "input_args": {"from_nodes": ["src"], "poll_ms": 40},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
     should_not_run = {
         "node_id": "should_not_run",
         "type": "analyzer",
-        "depends_on": ["src"],
+        "depends_on": [],  # would be routed-only
         "fan_in": "all",
         "io": {
             "input_inline": {
@@ -262,18 +244,12 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
                 "input_args": {"from_nodes": ["src"], "poll_ms": 40},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    src["routing"] = {"on_success": ["should_not_run"]}  # should be ignored due to explicit edges
+    # Routing hint that should be ignored due to explicit depends_on wiring.
+    src["routing"] = {"on_success": ["should_not_run"]}
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [src, only_edges, should_not_run],
-        "edges": [["src", "only_edges"]],
-    }
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [src, only_depends, should_not_run]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="edges_vs_routing_priority", task_id=task_id)
@@ -281,13 +257,11 @@ async def test_edges_vs_routing_priority(env_and_imports, inmemory_db, coord, wo
     with log_context(task_id=task_id):
         tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
         st = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
-        tlog.debug("edges_routes.final.status", event="edges_routes.final.status", statuses=st)
+        tlog.debug("depends_routes.final.status", event="depends_routes.final.status", statuses=st)
 
-        assert st["only_edges"] == str(cd.RunState.finished)
-        assert st["should_not_run"] in (
-            None,
-            str(cd.RunState.queued),
-        ), "routing.on_success must not trigger when explicit edges exist"
+        assert st["only_depends"] == str(cd.RunState.finished)
+        # Expected (when implemented): routed target must not run when explicit dependency exists.
+        assert st.get("should_not_run") in (None, str(cd.RunState.queued))
 
 
 @pytest.mark.asyncio
@@ -308,8 +282,6 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
         "depends_on": ["u1", "u2"],
         "fan_in": "all",
         "io": {"fn": "merge.generic", "fn_args": {"from_nodes": ["u1", "u2"], "target": {"key": "merged-k"}}},
-        "status": None,
-        "attempt_epoch": 0,
     }
 
     sink = {
@@ -324,16 +296,9 @@ async def test_coordinator_fn_merge_without_worker(env_and_imports, inmemory_db,
                 "input_args": {"from_nodes": ["merge"], "poll_ms": 40},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [u1, u2, merge, sink],
-        "edges": [["u1", "merge"], ["u2", "merge"], ["merge", "sink"]],
-    }
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, merge, sink]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug("task.created", event="task.created", test_name="coordinator_fn_merge_without_worker", task_id=task_id)
@@ -371,7 +336,7 @@ async def test_routing_on_failure_triggers_remediator_only(
     succ = {
         "node_id": "succ",
         "type": "analyzer",
-        "depends_on": ["u"],
+        "depends_on": ["u"],  # explicit success path
         "fan_in": "all",
         "io": {
             "input_inline": {
@@ -379,25 +344,16 @@ async def test_routing_on_failure_triggers_remediator_only(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 40},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
     remed = {
         "node_id": "remed",
         "type": "analyzer",
-        "depends_on": [],  # should be triggered by routing.on_failure (no explicit edge)
+        "depends_on": [],  # should be triggered by routing.on_failure (no explicit dependency)
         "fan_in": "all",
         "io": {"input_inline": {"input_adapter": "noop", "input_args": {}}},
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [u, succ, remed],
-        "edges": [["u", "succ"]],  # only on-success path is wired explicitly
-    }
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, succ, remed]}
 
     task_id = await coord.create_task(params={}, graph=graph)
 
@@ -409,14 +365,14 @@ async def test_routing_on_failure_triggers_remediator_only(
         "task_id": task_id,
         "node_id": "u",
         "step_type": "indexer",
-        "attempt_epoch": 0,  # matches current attempt_epoch (not started)
+        "attempt_epoch": 0,  # coordinator will match current attempt epoch (not started)
         "ts_ms": 0,
         "payload": {"kind": "TASK_FAILED", "permanent": True, "reason_code": "test_fail"},
     }
     await BROKER.produce("status.indexer.v1", env)
 
-    # Give the coordinator some time to process the failure.
-    await cd.asyncio.sleep(0.2)  # uses patched fast tick settings via fixtures
+    # Give the coordinator some time to process the failure (fast ticks in tests).
+    await asyncio.sleep(0.2)
 
     doc = await inmemory_db.tasks.find_one({"id": task_id}, {"graph": 1})
     s_succ = (node_by_id(doc, "succ") or {}).get("status")
@@ -452,8 +408,6 @@ async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 30},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
     b_wait = {
         "node_id": "b_wait",
@@ -466,16 +420,9 @@ async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 30},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    graph = {
-        "schema_version": "1.0",
-        "nodes": [u, a_fast, b_wait],
-        "edges": [["u", "a_fast"], ["u", "b_wait"]],
-    }
-    graph = prime_graph(cd, graph)
+    graph = {"schema_version": "1.0", "nodes": [u, a_fast, b_wait]}
 
     task_id = await coord.create_task(params={}, graph=graph)
 
@@ -488,8 +435,8 @@ async def test_fanout_one_upstream_two_downstreams_mixed_start_when(
 
     # Eventually both must finish.
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
-    final = {n["node_id"]: n["status"] for n in tdoc["graph"]["nodes"]}
+    final = {n["node_id"]: str(n["status"]) for n in tdoc["graph"]["nodes"]}
     tlog.debug("fanout.mixed.final", event="fanout.mixed.final", statuses=final)
-    assert final["u"] == cd.RunState.finished
-    assert final["a_fast"] == cd.RunState.finished
-    assert final["b_wait"] == cd.RunState.finished
+    assert final["u"] == str(cd.RunState.finished)
+    assert final["a_fast"] == str(cd.RunState.finished)
+    assert final["b_wait"] == str(cd.RunState.finished)

@@ -10,14 +10,6 @@ from ..core.time import Clock, SystemClock
 from ..core.utils import jitter_ms, stable_hash
 from ..protocol.messages import Envelope
 
-# Optional import: in some tests pymongo may be absent
-try:  # pragma: no cover - import-time branch
-    from pymongo.errors import DuplicateKeyError
-except Exception:  # pragma: no cover - fallback for environments w/o pymongo
-
-    class DuplicateKeyError(Exception):  # type: ignore
-        pass
-
 
 class OutboxDispatcher:
     """
@@ -137,5 +129,5 @@ class OutboxDispatcher:
         }
         try:
             await self.db.outbox.insert_one(doc)
-        except DuplicateKeyError:
-            return
+        except Exception:
+            pass

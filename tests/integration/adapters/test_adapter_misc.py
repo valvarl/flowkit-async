@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 from tests.helpers.graph import (
-    make_graph,
     node_by_id,
-    prime_graph,
     wait_task_finished,
     wait_task_status,
 )
@@ -116,8 +114,6 @@ async def test_handler_adapter_used_when_cmd_absent(env_and_imports, inmemory_db
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 4, "total_skus": 8}},  # 4 + 4
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -128,11 +124,16 @@ async def test_handler_adapter_used_when_cmd_absent(env_and_imports, inmemory_db
             # No cmd.input_inline here → handler-provided adapter should be used
             "start_when": "first_batch"
         },
-        "status": None,
-        "attempt_epoch": 0,
+    }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
     }
 
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):
@@ -160,11 +161,16 @@ async def test_fallback_to_iter_batches_when_no_adapter(env_and_imports, inmemor
         "io": {
             # No input_inline at all
         },
-        "status": None,
-        "attempt_epoch": 0,
+    }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
     }
 
-    g = prime_graph(cd, make_graph(nodes=[probe], edges=[], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):
@@ -197,11 +203,9 @@ async def test_cmd_unknown_adapter_causes_permanent_fail(env_and_imports, inmemo
                 "input_args": {"poll_ms": 10},
             }
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
 
-    g = prime_graph(cd, make_graph(nodes=[probe], edges=[]))
+    g = {"schema_version": "1.0", "nodes": [probe]}
     tid = await coord.create_task(params={}, graph=g)
 
     # Task should become failed (permanent) quickly.
@@ -227,8 +231,6 @@ async def test_cmd_from_node_alias_supported(env_and_imports, inmemory_db, coord
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 3, "total_skus": 9}},  # 3 + 3 + 3
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -243,11 +245,16 @@ async def test_cmd_from_node_alias_supported(env_and_imports, inmemory_db, coord
                 "input_args": {"from_node": "u", "poll_ms": 20, "size": 3, "meta_list_key": "skus"},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
+    }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
     }
 
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):
@@ -289,8 +296,6 @@ async def test_handler_unknown_adapter_ignored_when_cmd_valid(
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 2, "total_skus": 6}},  # 2 + 2 + 2
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -304,11 +309,16 @@ async def test_handler_unknown_adapter_ignored_when_cmd_valid(
                 "input_args": {"from_nodes": ["u"], "poll_ms": 20, "size": 2, "meta_list_key": "skus"},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
+    }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
     }
 
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")], agg={"after": "probe"}))
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):

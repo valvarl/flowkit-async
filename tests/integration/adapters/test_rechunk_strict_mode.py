@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from tests.helpers.graph import make_graph, prime_graph, wait_task_finished, wait_task_status
+from tests.helpers.graph import wait_task_finished, wait_task_status
 from tests.helpers.handlers import build_indexer_handler
 
 from flowkit.protocol.messages import RunState
@@ -32,8 +32,6 @@ async def test_rechunk_requires_meta_key_in_strict_mode(env_and_imports, inmemor
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 2, "total_skus": 4}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -47,10 +45,8 @@ async def test_rechunk_requires_meta_key_in_strict_mode(env_and_imports, inmemor
                 "input_args": {"from_nodes": ["u"], "poll_ms": 10, "size": 2},  # ← no meta_list_key
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")]))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
     await wait_task_status(inmemory_db, tid, RunState.failed.value, timeout=6.0)
 
@@ -74,8 +70,6 @@ async def test_rechunk_with_meta_key_passes_in_strict_mode(env_and_imports, inme
         "depends_on": [],
         "fan_in": "all",
         "io": {"input_inline": {"batch_size": 2, "total_skus": 6}},
-        "status": None,
-        "attempt_epoch": 0,
     }
     probe = {
         "node_id": "probe",
@@ -89,10 +83,8 @@ async def test_rechunk_with_meta_key_passes_in_strict_mode(env_and_imports, inme
                 "input_args": {"from_nodes": ["u"], "poll_ms": 10, "size": 2, "meta_list_key": "skus"},
             },
         },
-        "status": None,
-        "attempt_epoch": 0,
     }
-    g = prime_graph(cd, make_graph(nodes=[u, probe], edges=[("u", "probe")]))
+    g = {"schema_version": "1.0", "nodes": [u, probe]}
     tid = await coord.create_task(params={}, graph=g)
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=8.0)
     assert any(n["node_id"] == "probe" and str(n["status"]).endswith("finished") for n in tdoc["graph"]["nodes"])
