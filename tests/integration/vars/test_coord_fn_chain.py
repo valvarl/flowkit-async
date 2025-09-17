@@ -45,30 +45,27 @@ async def test_coord_fn_chain_set_merge_incr_unset(inmemory_db, sla, max_batches
             {
                 "node_id": "n1",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.set", "fn_args": {"kv": {"routing.sla": sla, "limits.max_batches": max_batches}}},
             },
             {
                 "node_id": "n2",
+                "depends_on": ["n1"],
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.merge", "fn_args": {"data": {"flags": flags}}},
             },
             {
                 "node_id": "n3",
+                "depends_on": ["n2"],
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.incr", "fn_args": {"key": "counters.pages", "by": incr_by}},
             },
             {
                 "node_id": "n4",
+                "depends_on": ["n3"],
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.unset", "fn_args": {"keys": ["limits.max_batches"]}},
             },
         ],
-        "edges": [("n1", "n2"), ("n2", "n3"), ("n3", "n4")],
-        "edges_ex": [],
     }
 
     tid = await coord.create_task(params={}, graph=g)

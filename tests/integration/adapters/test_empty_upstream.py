@@ -42,7 +42,14 @@ async def test_empty_upstream_finishes_with_zero_count(env_and_imports, inmemory
             },
         },
     }
-    g = {"schema_version": "1.0", "nodes": [u, probe]}
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
+    }
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
     tdoc = await wait_task_finished(inmemory_db, tid, timeout=8.0)
     assert node_by_id(tdoc, "u")["status"] == cd.RunState.finished

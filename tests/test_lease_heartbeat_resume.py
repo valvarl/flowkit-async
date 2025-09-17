@@ -514,7 +514,7 @@ async def test_worker_restart_with_new_id_bumps_epoch(env_and_imports, inmemory_
             lease_deadline_ts_ms=coord.clock.now_ms() + 60_000,
         ).model_dump(),
     )
-    await BROKER.produce(coord.bus.topic_status("sleepy"), stale_env.model_dump(mode="json"))
+    await BROKER.produce(coord.cfg.topic_status("sleepy"), stale_env.model_dump(mode="json"))
     await asyncio.sleep(0.2)
 
     d3 = await inmemory_db.tasks.find_one({"id": task_id})
@@ -550,7 +550,7 @@ async def test_heartbeat_tolerates_clock_skew(env_and_imports, inmemory_db, coor
         },
     )
 
-    topic = coord.bus.topic_status("noop")
+    topic = coord.cfg.topic_status("noop")
 
     def _hb(deadline: int):
         return cd.Envelope(
@@ -618,6 +618,11 @@ async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord,
         await asyncio.sleep(0.03)
 
     # Emulate expired lease on upstream via permanent TASK_FAILED
+    tdoc = await inmemory_db.tasks.find_one({"id": task_id})
+    up_node = next(iter(n for n in (tdoc.get("graph", {})["nodes"])), None)
+    assert up_node and up_node["node_id"] == "up"
+    epoch = int(up_node.get("attempt_epoch") or 0)
+
     env_fail = cd.Envelope(
         msg_type=cd.MsgType.event,
         role=cd.Role.worker,
@@ -625,7 +630,7 @@ async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord,
         task_id=task_id,
         node_id="up",
         step_type="noop",
-        attempt_epoch=0,
+        attempt_epoch=epoch,
         ts_ms=coord.clock.now_ms(),
         payload=cd.EvTaskFailed(
             kind=cd.EventKind.TASK_FAILED,
@@ -635,7 +640,7 @@ async def test_lease_expiry_cascades_cancel(env_and_imports, inmemory_db, coord,
             error=None,
         ).model_dump(),
     )
-    await BROKER.produce(coord.bus.topic_status("noop"), env_fail.model_dump(mode="json"))
+    await BROKER.produce(coord.cfg.topic_status("noop"), env_fail.model_dump(mode="json"))
 
     # Wait for downstream to become cancelling
     t1 = time()

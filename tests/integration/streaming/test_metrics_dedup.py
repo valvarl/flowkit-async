@@ -65,7 +65,14 @@ async def test_metrics_idempotent_on_duplicate_status_events(
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
@@ -135,7 +142,14 @@ async def test_status_out_of_order_does_not_break_aggregation(
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):
@@ -209,7 +223,14 @@ async def test_metrics_dedup_persists_across_coord_restart(
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     with log_context(task_id=task_id):

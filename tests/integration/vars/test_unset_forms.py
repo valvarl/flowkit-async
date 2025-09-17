@@ -29,19 +29,15 @@ async def test_vars_unset_kwargs_list_in_coord_fn(inmemory_db, initial_kv, keys_
             {
                 "node_id": "set",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.set", "fn_args": {"kv": initial_kv}},
             },
             {
                 "node_id": "unset",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.unset", "fn_args": {"keys": list(keys_to_unset)}},
                 "depends_on": ["set"],
             },
         ],
-        "edges": [("set", "unset")],
-        "edges_ex": [],
     }
 
     tid = await coord.create_task(params={}, graph=g)

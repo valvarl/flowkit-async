@@ -91,8 +91,15 @@ async def test_cmd_input_inline_overrides_handler_load_input(env_and_imports, in
             },
         },
     }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
+    }
 
-    graph = {"schema_version": "1.0", "nodes": [u, u2, probe]}
+    graph = {"schema_version": "1.0", "nodes": [u, u2, probe, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
 

@@ -47,8 +47,15 @@ async def test_multistream_fanin_stream_to_one_downstream(env_and_imports, inmem
             },
         },
     }
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
 
-    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d]}
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tlog.debug(

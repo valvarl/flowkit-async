@@ -41,7 +41,14 @@ async def test_metrics_isolation_between_tasks(env_and_imports, inmemory_db, coo
                 },
             },
         }
-        g = {"schema_version": "1.0", "nodes": [u, d]}
+        agg = {
+            "node_id": "agg_d",
+            "type": "coordinator_fn",
+            "depends_on": ["d"],
+            "fan_in": "all",
+            "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+        }
+        g = {"schema_version": "1.0", "nodes": [u, d, agg]}
         tid = await coord.create_task(params={}, graph=g)
         with log_context(task_id=tid):
             tdoc = await wait_task_finished(inmemory_db, tid, timeout=12.0)
@@ -87,7 +94,14 @@ async def test_metrics_cross_talk_guard(env_and_imports, inmemory_db, coord, wor
                 },
             },
         }
-        return {"schema_version": "1.0", "nodes": [u, d]}
+        agg = {
+            "node_id": "agg_d",
+            "type": "coordinator_fn",
+            "depends_on": ["d"],
+            "fan_in": "all",
+            "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+        }
+        return {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     g1 = build_graph(15, 5)
     g2 = build_graph(21, 4)

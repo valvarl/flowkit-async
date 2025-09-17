@@ -531,7 +531,8 @@ class Coordinator:
           - Else (no parents) → return None (source handler is expected to generate input).
         """
         io = node.get("io") or {}
-        ii = (io.get("input_inline") or {}) if isinstance(io.get("input_inline"), dict) else {}
+        ii_raw = io.get("input_inline")
+        ii = (ii_raw or {}) if isinstance(ii_raw, dict) else {}
         adapter = ii.get("input_adapter")
         args = (ii.get("input_args") or {}) if isinstance(ii.get("input_args"), dict) else {}
         start_when = str(io.get("start_when", "ready")).lower()
@@ -555,6 +556,9 @@ class Coordinator:
             if not ok:
                 raise ValueError(f"node {node['node_id']}: {why}")
             return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": from_nodes}}
+
+        if isinstance(ii_raw, dict) and ii_raw and "input_adapter" not in ii_raw:
+            return ii_raw
 
         # No explicit adapter → auto-build if parents exist
         if parents and start_when != "first_batch":
@@ -940,23 +944,40 @@ class Coordinator:
         try:
             io_inline = self._build_io_plan(task_doc, node)
         except Exception as e:
-            # Defer the node with validation error to avoid tight retry loops
-            backoff = int((node.get("retry_policy") or {}).get("backoff_sec") or 300)
-            await self.db.tasks.update_one(
-                {"id": task_id, "graph.nodes.node_id": node_id},
-                {
-                    "$set": {
-                        "graph.nodes.$.status": RunState.deferred,
-                        "graph.nodes.$.next_retry_at_ms": self.clock.now_ms() + backoff * 1000,
-                        "graph.nodes.$.last_error": f"io_plan:{e}",
-                    }
-                },
-            )
+            # FAST-FAIL POLICY:
+            # Невалидная конфигурация I/O-плана — детерминированная ошибка графа.
+            # Сразу фейлим узел и всю задачу, дополнительно инициируем каскадную отмену.
+            err = f"io_plan:{e}"
+            with swallow(
+                logger=self.log,
+                code="node.fail.io_plan",
+                msg="failed to mark node as failed on io_plan error",
+                level=logging.ERROR,
+            ):
+                await self.db.tasks.update_one(
+                    {"id": task_id, "graph.nodes.node_id": node_id},
+                    {
+                        "$set": {
+                            "graph.nodes.$.status": RunState.failed,
+                            "graph.nodes.$.finished_at": self.clock.now_dt(),
+                            "graph.nodes.$.last_error": err,
+                        }
+                    },
+                )
+            # Отменяем остальные узлы (если какие-то уже успели стартовать) и помечаем задачу как failed.
+            with swallow(
+                logger=self.log,
+                code="task.fail.io_plan",
+                msg="failed to fail task on io_plan error",
+                level=logging.ERROR,
+            ):
+                await self._cascade_cancel(task_id, reason=err)
+                await self.db.tasks.update_one(
+                    {"id": task_id},
+                    {"$set": {"status": RunState.failed, "finished_at": self.clock.now_dt()}},
+                )
             self.log.error(
-                "preflight.io_plan.invalid",
-                event="coord.preflight.io_plan.invalid",
-                node_id=node_id,
-                error=str(e),
+                "preflight.io_plan.invalid", event="coord.preflight.io_plan.invalid", node_id=node_id, error=str(e)
             )
             return
 

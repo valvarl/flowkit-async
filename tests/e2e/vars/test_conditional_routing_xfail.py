@@ -15,8 +15,6 @@ from __future__ import annotations
 import pytest
 from tests.helpers.graph import wait_task_finished
 
-from flowkit.protocol.messages import RunState
-
 pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.vars]
 
 
@@ -48,28 +46,22 @@ async def test_conditional_routing_by_vars(env_and_imports, coord, inmemory_db):
             {
                 "node_id": "set_vars",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.set", "fn_args": {"kv": {"routing.sla": "gold"}}},
             },
             # The two branches below are conceptual; coordinator should choose based on vars.
             {
                 "node_id": "gold_only",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.mark", "fn_args": {"target": {}, "tag": "gold"}},
                 "depends_on": ["set_vars"],
             },
             {
                 "node_id": "silver_only",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.mark", "fn_args": {"target": {}, "tag": "silver"}},
                 "depends_on": ["set_vars"],
             },
         ],
-        # NOTE: In the future, explicit edges may be replaced by conditional routing rules.
-        "edges": [("set_vars", "gold_only"), ("set_vars", "silver_only")],
-        "edges_ex": [],
     }
 
     tid = await coord.create_task(params={}, graph=g)

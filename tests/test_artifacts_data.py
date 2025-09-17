@@ -5,7 +5,7 @@ import math
 import pytest
 
 from flowkit.core.log import log_context
-from tests.helpers.graph import node_by_id, prime_graph, wait_task_finished
+from tests.helpers.graph import node_by_id, wait_task_finished
 from tests.helpers.handlers import build_analyzer_handler, build_indexer_handler
 
 # Only required roles to speed up tests
@@ -45,8 +45,6 @@ def graph_partial_and_collect(*, total: int, batch_size: int, rechunk: int, aggr
                 },
             },
         ],
-        "edges": [["w1", "w2"]],
-        "edges_ex": [{"from": "w1", "to": "w2", "mode": "async", "trigger": "on_batch"}],
     }
     if aggregate:
         g["nodes"].append(
@@ -58,7 +56,6 @@ def graph_partial_and_collect(*, total: int, batch_size: int, rechunk: int, aggr
                 "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "w2", "mode": "sum"}},
             }
         )
-        g["edges"].append(["w2", "agg_w2"])
     return g
 
 
@@ -79,7 +76,6 @@ def graph_merge_generic() -> dict:
                 "io": {"fn": "merge.generic", "fn_args": {"from_nodes": ["a", "b"], "target": {"key": "merged"}}},
             },
         ],
-        "edges": [["a", "m"], ["b", "m"]],
     }
 
 
@@ -111,7 +107,7 @@ async def test_partial_shards_and_stream_counts(
 
     # Parameters
     total, bs, rechunk = 11, 4, 3
-    graph = prime_graph(cd, graph_partial_and_collect(total=total, batch_size=bs, rechunk=rechunk))
+    graph = graph_partial_and_collect(total=total, batch_size=bs, rechunk=rechunk)
     tlog.debug("graph.built", event="graph.built", total=total, batch_size=bs, rechunk=rechunk)
 
     coord = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)
@@ -173,7 +169,7 @@ async def test_merge_generic_creates_complete_artifact(
     await worker_factory(("indexer", build_indexer_handler(db=inmemory_db)))
     tlog.debug("workers.ready", event="workers.ready", roles=["indexer"])
 
-    graph = prime_graph(cd, graph_merge_generic())
+    graph = graph_merge_generic()
     tlog.debug("graph.built", event="graph.built", nodes=["a", "b", "m"])
 
     coord = cd.Coordinator(db=inmemory_db, cfg=coord_cfg)

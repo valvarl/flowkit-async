@@ -15,10 +15,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from tests.helpers.graph import prime_graph, wait_node_running
+from tests.helpers.graph import wait_node_running
 from tests.helpers.handlers import build_cancelable_source_handler
-
-from flowkit.protocol.messages import RunState
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.vars]
 
@@ -37,22 +35,17 @@ async def test_cancel_midflow_preserves_coordinator_vars(env_and_imports, inmemo
             {
                 "node_id": "n1",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.set", "fn_args": {"kv": {"routing.sla": "gold", "limits.max_batches": 5}}},
             },
             {
                 "node_id": "s",
                 "type": "source",
-                "status": RunState.queued,
                 "depends_on": ["n1"],
                 "fan_in": "all",
                 "io": {"input_inline": {}},
             },
         ],
-        "edges": [("n1", "s")],
-        "edges_ex": [],
     }
-    g = prime_graph(cd, g)
 
     task_id = await coord.create_task(params={}, graph=g)
 

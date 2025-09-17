@@ -106,7 +106,14 @@ async def test_empty_upstream_is_not_error(env_and_imports, inmemory_db, coord, 
             },
         },
     }
-    g = {"schema_version": "1.0", "nodes": [u, probe]}
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
+    }
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):
@@ -153,8 +160,15 @@ async def test_rechunk_without_meta_list_key_treats_each_artifact_as_single_item
             },
         },
     }
+    agg = {
+        "node_id": "agg_probe",
+        "type": "coordinator_fn",
+        "depends_on": ["probe"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "probe", "mode": "sum"}},
+    }
 
-    g = {"schema_version": "1.0", "nodes": [u, probe]}
+    g = {"schema_version": "1.0", "nodes": [u, probe, agg]}
     tid = await coord.create_task(params={}, graph=g)
 
     with log_context(task_id=tid):

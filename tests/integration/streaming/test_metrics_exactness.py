@@ -39,7 +39,14 @@ async def test_metrics_single_stream_exact_count(env_and_imports, inmemory_db, c
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)
@@ -83,7 +90,14 @@ async def test_metrics_multistream_exact_sum(env_and_imports, inmemory_db, coord
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u1, u2, u3, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=14.0)
@@ -122,7 +136,14 @@ async def test_metrics_partial_batches_exact_count(env_and_imports, inmemory_db,
             },
         },
     }
-    graph = {"schema_version": "1.0", "nodes": [u, d]}
+    agg = {
+        "node_id": "agg_d",
+        "type": "coordinator_fn",
+        "depends_on": ["d"],
+        "fan_in": "all",
+        "io": {"fn": "metrics.aggregate", "fn_args": {"node_id": "d", "mode": "sum"}},
+    }
+    graph = {"schema_version": "1.0", "nodes": [u, d, agg]}
 
     task_id = await coord.create_task(params={}, graph=graph)
     tdoc = await wait_task_finished(inmemory_db, task_id, timeout=12.0)

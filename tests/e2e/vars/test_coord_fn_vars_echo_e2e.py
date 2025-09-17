@@ -55,19 +55,15 @@ async def test_scheduler_runs_coordfn_chain_and_child_sees_vars(env_and_imports,
             {
                 "node_id": "n1",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.set", "fn_args": {"kv": {"routing.sla": "gold", "limits.max_batches": 5}}},
             },
             {
                 "node_id": "n2",
                 "type": "coordinator_fn",
-                "status": RunState.queued,
                 "io": {"fn": "vars.echo", "fn_args": {"target": {}}},
                 "depends_on": ["n1"],
             },
         ],
-        "edges": [("n1", "n2")],
-        "edges_ex": [],
     }
 
     task_id = await coord.create_task(params={}, graph=g)
