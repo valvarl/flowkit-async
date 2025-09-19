@@ -10,7 +10,7 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer
 
 from ..core.config import WorkerConfig
-from ..core.log import bind_context, get_logger, log_context, swallow, warn_once
+from ..core.logging import bind_context, get_logger, log_context, swallow, warn_once
 from ..core.time import Clock, SystemClock
 from ..core.utils import stable_hash
 from ..protocol.messages import (

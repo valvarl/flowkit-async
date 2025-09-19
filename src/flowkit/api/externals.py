@@ -39,7 +39,7 @@ class KafkaTopic:
 
     bootstrap: str
     topic: str
-    client_args: Mapping[str, Any] = None  # e.g., security options
+    client_args: Mapping[str, Any] | None = None  # e.g., security options
 
 
 @dataclass(frozen=True)

@@ -7,13 +7,13 @@ Public exports for the Graph package.
 End-user / coordinator code should import GraphSpecV22 and compile_execution_plan.
 """
 
-from .compiler import ExecutionPlan, compile_execution_plan, prepare_for_task_create_v22
-from .spec import GraphSpecV22, NodeSpecV2
+from .compiler import ExecutionPlan, compile_execution_plan, prepare_for_task_create_v21
+from .spec import GraphSpecV21, NodeSpecV2
 
 __all__ = [
     "ExecutionPlan",
-    "GraphSpecV22",
+    "GraphSpecV21",
     "NodeSpecV2",
     "compile_execution_plan",
-    "prepare_for_task_create_v22",
+    "prepare_for_task_create_v21",
 ]

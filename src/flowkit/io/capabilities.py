@@ -17,7 +17,7 @@ __all__ = [
     "get_caps",
 ]
 
-ContentKindT = Literal["BYTES", "RECORD", "BATCH", "REF", "CONTROL"]
+ContentKindT = Literal["RECORD", "BYTES", "FILE", "KV", "REF", "CONTROL"]
 
 
 class AdapterCaps(TypedDict, total=False):
@@ -39,25 +39,21 @@ KNOWN_ADAPTER_CAPS: dict[str, AdapterCaps] = {
     # ---- input adapters
     "pull.from_artifacts": {
         "supports_select": ["batches", "final"],
-        "produces": {"content": ["BATCH", "RECORD"]},
-    },
-    "pull.from_artifacts.rechunk:size": {
-        "supports_select": ["final"],
-        "produces": {"content": ["BATCH"]},
+        "produces": {"content": ["RECORD"]},
     },
     "pull.kafka.subscribe": {
         "supports_select": ["batches"],
-        "produces": {"content": ["BATCH", "BYTES"]},
+        "produces": {"content": ["BYTES"]},
     },
     # ---- sinks / outputs
     "push.to_artifacts": {
-        "consumes": {"content": ["BATCH", "RECORD", "BYTES", "REF"]},
+        "consumes": {"content": ["RECORD", "BYTES", "REF"]},
     },
     "emit.kafka": {
-        "consumes": {"content": ["BATCH", "RECORD", "BYTES"]},
+        "consumes": {"content": ["RECORD", "BYTES"]},
     },
     "emit.s3": {
-        "consumes": {"content": ["BATCH", "BYTES", "REF"]},
+        "consumes": {"content": ["BYTES", "REF"]},
     },
 }
 

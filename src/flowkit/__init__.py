@@ -13,11 +13,13 @@ except Exception:  # pragma: no cover
     except Exception:
         __version__ = "0.0.0"
 
-from .coordinator.runner import Coordinator
+from .runtime.coordinator.coordinator import Coordinator
+from .runtime.worker.worker import Worker
 from .core.config import CoordinatorConfig, WorkerConfig
 
 __all__ = [
     "Coordinator",
+    "Worker",
     "CoordinatorConfig",
     "WorkerConfig",
     "__version__",

@@ -6,7 +6,7 @@ import random
 from collections.abc import Mapping
 from typing import Any
 
-from ...api.adapters import AdapterContext, SinkAdapter
+from ...api.adapters import AdapterContext, OutputAdapter
 from ...api.registry import PluginRegistry
 from ...api.streams import Batch, Item
 
@@ -110,7 +110,7 @@ class SinksRunner:
 # ---- helpers ----------------------------------------------------------------
 
 
-def _create_sink(registry: PluginRegistry, name: str, ctx: AdapterContext, args: Mapping[str, Any]) -> SinkAdapter:
+def _create_sink(registry: PluginRegistry, name: str, ctx: AdapterContext, args: Mapping[str, Any]) -> OutputAdapter:
     if hasattr(registry, "create"):
         try:
             sink = registry.create(kind="sink", name=name, ctx=ctx, **args)

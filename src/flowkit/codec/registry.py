@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..api.streams import Batch
 from ..io.content import ContentKind, FrameDescriptor
-from ..worker.handlers.base import Batch
 
 __all__ = [
     "Codec",
