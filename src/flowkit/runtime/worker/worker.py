@@ -5,11 +5,10 @@ import asyncio
 import logging
 import uuid
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any
 
 from aiokafka import AIOKafkaConsumer
 
-from ..transport.kafka_bus import KafkaBus
 from ..core.config import WorkerConfig
 from ..core.log import bind_context, get_logger, log_context, swallow, warn_once
 from ..core.time import Clock, SystemClock
@@ -25,6 +24,7 @@ from ..protocol.messages import (
     ReplyKind,
     Role,
 )
+from ..transport.kafka_bus import KafkaBus
 from .state import ActiveRun
 
 
@@ -55,9 +55,9 @@ class Worker:
     def __init__(
         self,
         *,
-        cfg: Optional[WorkerConfig] = None,
-        clock: Optional[Clock] = None,
-        roles: Optional[list[str]] = None,
+        cfg: WorkerConfig | None = None,
+        clock: Clock | None = None,
+        roles: list[str] | None = None,
     ) -> None:
         self.cfg = WorkerConfig.load() if cfg is None else cfg
         if roles:
@@ -74,11 +74,11 @@ class Worker:
 
         # consumers
         self._cmd_consumers: dict[str, AIOKafkaConsumer] = {}
-        self._query_consumer: Optional[AIOKafkaConsumer] = None
-        self._signals_consumer: Optional[AIOKafkaConsumer] = None
+        self._query_consumer: AIOKafkaConsumer | None = None
+        self._signals_consumer: AIOKafkaConsumer | None = None
 
         # run-state
-        self.active: Optional[ActiveRun] = None
+        self.active: ActiveRun | None = None
         self._busy = False
         self._busy_lock = asyncio.Lock()
         self._stopping = False
@@ -164,7 +164,7 @@ class Worker:
 
     # --------------------------------------------------------------------- internal helpers
 
-    def _spawn(self, coro, *, name: Optional[str] = None) -> None:
+    def _spawn(self, coro, *, name: str | None = None) -> None:
         t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
         self._bg.add(t)
 
@@ -200,7 +200,7 @@ class Worker:
 
     async def _send_status(self, role: str, env: Envelope) -> None:
         topic = self.cfg.topic_status(role)
-        key = f"{env.task_id}:{env.node_id}".encode("utf-8")
+        key = f"{env.task_id}:{env.node_id}".encode()
         await self.bus.send(topic, key, env)
 
     async def _send_announce(self, kind: EventKind, extra: dict[str, Any]) -> None:

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-from typing import Any, Optional
 
 from ...api.streams import Checkpoint
 from ...storage.offsets import CheckpointStore as OffsetsStoreProtocol
@@ -31,7 +30,7 @@ class CheckpointsStore:
         self._node_id = node_id
         self._attempt = int(attempt_epoch)
 
-    async def read(self, key: str) -> Optional[Checkpoint]:
+    async def read(self, key: str) -> Checkpoint | None:
         """
         Load the last committed checkpoint for a given external key.
         Returns None if absent.

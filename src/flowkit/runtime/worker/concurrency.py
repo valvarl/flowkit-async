@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, Optional
-
 
 TaskFn = Callable[[], Awaitable[None]]
 
@@ -34,13 +33,13 @@ class WorkerPool:
       - Backpressure: submit() awaits until the role has capacity.
     """
 
-    def __init__(self, *, default_limit: int = 4, per_role: Optional[Dict[str, int]] = None) -> None:
+    def __init__(self, *, default_limit: int = 4, per_role: dict[str, int] | None = None) -> None:
         self._default = default_limit
-        self._per_role: Dict[str, _Lane] = {}
+        self._per_role: dict[str, _Lane] = {}
         for r, lim in (per_role or {}).items():
             self._per_role[r] = _Lane(limit=max(1, int(lim)))
-        self._queues: Dict[str, asyncio.Queue[TaskFn]] = {}
-        self._loop_task: Optional[asyncio.Task] = None
+        self._queues: dict[str, asyncio.Queue[TaskFn]] = {}
+        self._loop_task: asyncio.Task | None = None
         self._running = False
 
     async def start(self) -> None:

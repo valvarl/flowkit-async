@@ -16,11 +16,10 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from ...protocol.messages import Envelope
+from ...storage.outbox import OutboxRecord, OutboxStore
 from ...transport.bus import Bus
-from ...storage.outbox import OutboxStore, OutboxRecord
 
 
 @dataclass
@@ -47,7 +46,7 @@ class OutboxDispatcher:
     """Storage-agnostic dispatcher for the coordinator's message outbox."""
 
     def __init__(
-        self, *, store: OutboxStore, bus: Bus, cfg: OutboxConfig | None = None, logger: Optional[logging.Logger] = None
+        self, *, store: OutboxStore, bus: Bus, cfg: OutboxConfig | None = None, logger: logging.Logger | None = None
     ) -> None:
         self.store = store
         self.bus = bus
@@ -98,7 +97,7 @@ class OutboxDispatcher:
             key_bytes = (ob.key or "").encode("utf-8") or None
             await self.bus.send(ob.topic, key_bytes, env)
             await self.store.mark_sent(ob.rec_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             await self._on_send_fail(ob, e)
 
     async def _on_send_fail(self, ob: OutboxRecord, err: Exception) -> None:

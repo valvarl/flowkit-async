@@ -15,10 +15,11 @@ create topic/group-bound consumers as needed.
 
 import asyncio
 import logging
-from typing import AsyncIterator, Mapping, cast
+from collections.abc import AsyncIterator, Mapping
+from typing import cast
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-from aiokafka.structs import TopicPartition, OffsetAndMetadata
+from aiokafka.structs import OffsetAndMetadata, TopicPartition
 
 from ..core.logging import get_logger, swallow
 from ..core.utils import dumps, loads
@@ -79,7 +80,7 @@ class _KafkaConsumerWrapper(Consumer):
             try:
                 payload = cast(Mapping[str, object], rec.value)
                 env = Envelope.model_validate(payload)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Do not raise on bad payloads — log and continue.
                 self._log.warning("failed to decode envelope", exc_info=True, topic=rec.topic, partition=rec.partition)
                 continue
@@ -247,6 +248,6 @@ class KafkaBus(Bus):
                 await ev.wait()
             else:
                 await asyncio.wait_for(ev.wait(), timeout=timeout_ms / 1000.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         return self.collect_replies(corr_id)

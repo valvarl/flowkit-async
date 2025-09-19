@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Optional, Mapping, Any
+from typing import Any
 
 
 @dataclass
 class LeaseState:
-    worker_id: Optional[str] = None
-    lease_id: Optional[str] = None
-    deadline_ts_ms: Optional[int] = None
+    worker_id: str | None = None
+    lease_id: str | None = None
+    deadline_ts_ms: int | None = None
 
 
 @dataclass
@@ -24,8 +26,8 @@ class ActiveRun:
     attempt_epoch: int
     lease: LeaseState = field(default_factory=LeaseState)
     cancel_requested: bool = False
-    cancel_deadline_ts_ms: Optional[int] = None
-    started_at_ms: Optional[int] = None
+    cancel_deadline_ts_ms: int | None = None
+    started_at_ms: int | None = None
 
     def adopt(self, snap: Mapping[str, Any]) -> None:
         """Adopt fields from a worker snapshot (best-effort)."""
@@ -36,6 +38,6 @@ class ActiveRun:
         if "attempt_epoch" in snap:
             self.attempt_epoch = int(snap["attempt_epoch"])
 
-    def request_cancel(self, *, deadline_ts_ms: Optional[int]) -> None:
+    def request_cancel(self, *, deadline_ts_ms: int | None) -> None:
         self.cancel_requested = True
         self.cancel_deadline_ts_ms = deadline_ts_ms

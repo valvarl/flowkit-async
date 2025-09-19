@@ -14,21 +14,21 @@ adapters is done by feeding buffers from adapter tasks.
 """
 
 from collections import deque
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Generic, Iterable, MutableMapping, Optional, Protocol, TypeVar
-
+from typing import Generic, Protocol, TypeVar
 
 __all__ = [
-    "SourceState",
-    "SourceBuffer",
     "BoundedDequeBuffer",
-    "MergeStrategy",
-    "InterleaveStrategy",
     "ConcatStrategy",
-    "PriorityStrategy",
-    "MergeRegistry",
-    "get_default_merge_registry",
+    "InterleaveStrategy",
     "MergeArbiter",
+    "MergeRegistry",
+    "MergeStrategy",
+    "PriorityStrategy",
+    "SourceBuffer",
+    "SourceState",
+    "get_default_merge_registry",
 ]
 
 
@@ -60,7 +60,7 @@ class SourceState:
     priority: int = 0
     weight: float = 1.0
     paused: bool = False
-    stats: Dict[str, int] = field(default_factory=lambda: {"served": 0})
+    stats: dict[str, int] = field(default_factory=lambda: {"served": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +87,12 @@ class BoundedDequeBuffer(Generic[T]):
     - close() marks the buffer as exhausted; get_nowait can still drain remaining items.
     """
 
-    __slots__ = ("_dq", "_maxsize", "_closed")
+    __slots__ = ("_closed", "_dq", "_maxsize")
 
     def __init__(self, maxsize: int) -> None:
         if maxsize <= 0:
             raise ValueError("maxsize must be > 0")
-        self._dq: Deque[T] = deque()
+        self._dq: deque[T] = deque()
         self._maxsize = int(maxsize)
         self._closed = False
 
@@ -131,7 +131,7 @@ class MergeStrategy(Protocol):
 
     name: str
 
-    def select_next(self, states: list[SourceState]) -> Optional[str]: ...
+    def select_next(self, states: list[SourceState]) -> str | None: ...
     def on_yield(self, alias: str) -> None: ...
     def on_block(self, alias: str) -> None: ...
 
@@ -143,9 +143,9 @@ class InterleaveStrategy:
 
     def __init__(self) -> None:
         # alias -> debt (lower debt is preferred)
-        self._debt: Dict[str, float] = {}
+        self._debt: dict[str, float] = {}
 
-    def select_next(self, states: list[SourceState]) -> Optional[str]:
+    def select_next(self, states: list[SourceState]) -> str | None:
         ready = [s for s in states if not s.exhausted and not s.paused and s.queue_size > 0]
         if not ready:
             return None
@@ -174,9 +174,9 @@ class ConcatStrategy:
     name = "concat"
 
     def __init__(self) -> None:
-        self._current: Optional[str] = None
+        self._current: str | None = None
 
-    def select_next(self, states: list[SourceState]) -> Optional[str]:
+    def select_next(self, states: list[SourceState]) -> str | None:
         by_alias = {s.alias: s for s in states}
         if self._current:
             s = by_alias.get(self._current)
@@ -206,14 +206,14 @@ class PriorityStrategy:
     name = "priority"
 
     def __init__(self) -> None:
-        self._rr_idx: Dict[int, int] = {}  # priority -> next rr index
+        self._rr_idx: dict[int, int] = {}  # priority -> next rr index
 
-    def select_next(self, states: list[SourceState]) -> Optional[str]:
+    def select_next(self, states: list[SourceState]) -> str | None:
         ready = [s for s in states if not s.exhausted and not s.paused and s.queue_size > 0]
         if not ready:
             return None
 
-        by_prio: Dict[int, list[SourceState]] = {}
+        by_prio: dict[int, list[SourceState]] = {}
         for s in ready:
             by_prio.setdefault(s.priority, []).append(s)
 
@@ -240,7 +240,7 @@ class MergeRegistry:
     """Simple registry of merge strategies (allows plugins/tests to override)."""
 
     def __init__(self) -> None:
-        self._by_name: Dict[str, MergeStrategy] = {}
+        self._by_name: dict[str, MergeStrategy] = {}
         self.register(InterleaveStrategy())
         self.register(ConcatStrategy())
         self.register(PriorityStrategy())
@@ -298,9 +298,9 @@ class MergeArbiter(Generic[T]):
     ) -> None:
         self._buffers = buffers
         self._strategy = strategy or InterleaveStrategy()
-        self._paused: Dict[str, bool] = {}
-        self._exhausted: Dict[str, bool] = {}
-        self._priority: Dict[str, int] = dict(priorities or {})
+        self._paused: dict[str, bool] = {}
+        self._exhausted: dict[str, bool] = {}
+        self._priority: dict[str, int] = dict(priorities or {})
 
     # ---- control
 

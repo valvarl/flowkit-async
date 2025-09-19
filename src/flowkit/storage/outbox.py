@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
+
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Mapping, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)

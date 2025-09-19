@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover
     # no-op fallbacks to keep imports safe
     class _N:
         def __init__(self, *a: Any, **k: Any) -> None: ...
-        def labels(self, *a: Any, **k: Any) -> "_N":
+        def labels(self, *a: Any, **k: Any) -> _N:
             return self
 
         def inc(self, *a: Any, **k: Any) -> None: ...
@@ -40,7 +40,7 @@ class CoordinatorMetrics:
     schedule_latency_ms: Any
 
     @classmethod
-    def create(cls) -> "CoordinatorMetrics":
+    def create(cls) -> CoordinatorMetrics:
         scheduled_total = Counter("flowkit_coord_scheduled_total", "Nodes scheduled", ["step_type"])
         dispatched_total = Counter("flowkit_coord_dispatched_total", "Nodes dispatched", ["step_type"])
         finished_total = Counter("flowkit_coord_finished_total", "Nodes finished", ["step_type", "result"])

@@ -8,9 +8,10 @@ These types model the data plane: content descriptors, items, batches and
 acknowledgement tokens. Adapters and transform operators should use them.
 """
 
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, MutableMapping, Optional, Sequence
+from typing import Any
 
 
 class ContentKind(str, Enum):
@@ -49,9 +50,9 @@ class FrameDescriptor:
     """
 
     kind: ContentKind
-    type: Optional[str] = None
-    schema_ref: Optional[str] = None
-    encoding: Optional[str] = None
+    type: str | None = None
+    schema_ref: str | None = None
+    encoding: str | None = None
 
 
 @dataclass
@@ -84,10 +85,10 @@ class Item:
 
     payload: Any
     meta: MutableMapping[str, Any] = field(default_factory=dict)
-    frame: Optional[FrameDescriptor] = None
-    checkpoint: Optional[Checkpoint] = None
-    port: Optional[str] = None
-    source_alias: Optional[str] = None
+    frame: FrameDescriptor | None = None
+    checkpoint: Checkpoint | None = None
+    port: str | None = None
+    source_alias: str | None = None
 
 
 @dataclass
@@ -115,13 +116,13 @@ class Batch:
     """
 
     items: Sequence[Item] | None = None
-    frame: Optional[FrameDescriptor] = None
-    blob: Optional[bytes | bytearray | memoryview] = None
-    ref: Optional[str | Mapping[str, Any]] = None
+    frame: FrameDescriptor | None = None
+    blob: bytes | bytearray | memoryview | None = None
+    ref: str | Mapping[str, Any] | None = None
     meta: MutableMapping[str, Any] = field(default_factory=dict)
-    checkpoint: Optional[Checkpoint] = None
-    port: Optional[str] = None
-    source_alias: Optional[str] = None
+    checkpoint: Checkpoint | None = None
+    port: str | None = None
+    source_alias: str | None = None
 
 
 # Optional explicit Ack/Nack message objects for adapter APIs that prefer them.
@@ -131,11 +132,11 @@ class Batch:
 class Ack:
     """Explicit acknowledgement carrying an optional checkpoint."""
 
-    checkpoint: Optional[Checkpoint] = None
+    checkpoint: Checkpoint | None = None
 
 
 @dataclass(frozen=True)
 class Nack:
     """Negative acknowledgement pointing to an optional error."""
 
-    error: Optional[BaseException] = None
+    error: BaseException | None = None

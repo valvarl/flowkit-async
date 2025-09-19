@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-from typing import Any, Dict
+
+from typing import Any
 
 """
 JSON Schemas for documentation and optional runtime validation where needed.
@@ -9,7 +10,7 @@ JSON Schemas for documentation and optional runtime validation where needed.
 __all__ = ["frame_descriptor_schema"]
 
 
-def frame_descriptor_schema() -> Dict[str, Any]:
+def frame_descriptor_schema() -> dict[str, Any]:
     """JSON Schema (draft-07) for FrameDescriptor-like objects."""
     return {
         "$schema": "http://json-schema.org/draft-07/schema#",

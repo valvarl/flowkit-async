@@ -10,7 +10,8 @@ Notes:
 """
 
 import re
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 
 __all__ = ["FunctionRegistry", "get_default_functions"]
 
@@ -21,7 +22,7 @@ class FunctionRegistry:
     """Pluggable function registry used by the expression evaluator."""
 
     def __init__(self) -> None:
-        self._fn: Dict[str, Func] = {}
+        self._fn: dict[str, Func] = {}
 
     def register(self, name: str, fn: Func) -> None:
         if not name or not callable(fn):
@@ -35,7 +36,7 @@ class FunctionRegistry:
         except KeyError:
             raise ValueError(f"function {name!r} is not allowed")
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         return sorted(self._fn.keys())
 
 
@@ -49,7 +50,7 @@ def _fn_in(value: Any, *options: Any) -> bool:
 def _fn_len(value: Any) -> int:
     try:
         return len(value)  # type: ignore[arg-type]
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ValueError("len() argument is not sized") from e
 
 
@@ -59,7 +60,7 @@ def _fn_starts_with(s: Any, prefix: Any) -> bool:
     return s.startswith(prefix)
 
 
-_re_cache: Dict[str, re.Pattern[str]] = {}
+_re_cache: dict[str, re.Pattern[str]] = {}
 
 
 def _fn_regex_match(s: Any, pattern: Any) -> bool:
@@ -82,7 +83,7 @@ def _fn_coalesce(*args: Any) -> Any:
 def _fn_contains(container: Any, item: Any) -> bool:
     try:
         return item in container  # type: ignore[operator]
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ValueError("contains() invalid arguments") from e
 
 

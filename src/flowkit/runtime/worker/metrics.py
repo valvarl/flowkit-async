@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
-from typing import Dict
 
 
 @dataclass
@@ -43,7 +43,7 @@ class WorkerMetrics:
     batches_out: Counter = field(default_factory=Counter)
     input_lag_ms: Gauge = field(default_factory=Gauge)
     queue_depth: Gauge = field(default_factory=Gauge)
-    op_durations_ms: Dict[str, Timer] = field(default_factory=dict)
+    op_durations_ms: dict[str, Timer] = field(default_factory=dict)
 
     def op_timer(self, name: str):
         t = self.op_durations_ms.setdefault(name, Timer())

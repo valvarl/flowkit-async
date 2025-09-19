@@ -12,15 +12,15 @@ Both return/accept `flowkit.api.streams.Checkpoint`, which is a JSON-serializabl
 token controlled by adapters (Kafka offsets, HTTP cursors, etc).
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from ..api.streams import Checkpoint
 
-
 __all__ = [
-    "OffsetError",
     "CheckpointStore",
+    "OffsetError",
     "OffsetKey",
     "OffsetStore",
 ]

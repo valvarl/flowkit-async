@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Any, Iterable, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 
-from ...api.adapters import SinkAdapter, AdapterContext
+from ...api.adapters import AdapterContext, SinkAdapter
 from ...api.registry import PluginRegistry
-from ...api.streams import Item, Batch
+from ...api.streams import Batch, Item
 
 
 class SinksRunner:
@@ -22,7 +23,7 @@ class SinksRunner:
         self._ctx = ctx
         self._sinks: list[tuple[str, SinkAdapter]] = []
         self._delivery: Mapping[str, Any] = {}
-        self._dlq: Optional[SinkAdapter] = None
+        self._dlq: SinkAdapter | None = None
 
     async def build(self, output_spec: Mapping[str, Any], *, registry: PluginRegistry) -> None:
         """
@@ -57,7 +58,7 @@ class SinksRunner:
                 if hasattr(maybe, "__await__"):
                     await maybe
 
-    async def deliver(self, x: Item | Batch, *, idempotency_key: Optional[str]) -> None:
+    async def deliver(self, x: Item | Batch, *, idempotency_key: str | None) -> None:
         """
         Deliver to all sinks with best-effort retries. If any sink exhausts retries,
         DLQ (if present) gets the element; otherwise the exception is propagated.
@@ -136,7 +137,7 @@ async def _send_with_retry(
     sink: SinkAdapter,
     x: Item | Batch,
     *,
-    idempotency_key: Optional[str],
+    idempotency_key: str | None,
     retries: int,
     backoff_ms: int,
     backoff_max_ms: int,

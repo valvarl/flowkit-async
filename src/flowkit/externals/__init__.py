@@ -5,20 +5,19 @@ from __future__ import annotations
 Public API for resolving and managing lifecycle of externals.
 """
 
+# Re-export protocol types for convenience of integrators
+from ..api.externals import ExternalError, ExternalProvider, ExternalReady
 from .registry import (
-    ExternalsResolver,
     ExternalFactory,
+    ExternalsResolver,
     merge_declared,
 )
 
-# Re-export protocol types for convenience of integrators
-from ..api.externals import ExternalProvider, ExternalReady, ExternalError
-
 __all__ = [
-    "ExternalsResolver",
+    "ExternalError",
     "ExternalFactory",
-    "merge_declared",
     "ExternalProvider",
     "ExternalReady",
-    "ExternalError",
+    "ExternalsResolver",
+    "merge_declared",
 ]

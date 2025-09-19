@@ -17,9 +17,9 @@ Usage:
     ])
 """
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Mapping, MutableMapping, Protocol, Optional
-
+from typing import Any, Protocol
 
 # ---- Backend protocol --------------------------------------------------------
 
@@ -37,7 +37,7 @@ class VarsBackend(Protocol):
     async def cas_update(
         self,
         task_id: str,
-        updater: Callable[[Dict[str, Any]], Dict[str, Any]],
+        updater: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> bool:
         """
         Perform optimistic update: read current value, call `updater` with a
@@ -69,7 +69,7 @@ class VarsStore:
     backend: VarsBackend
     max_retries: int = 8
 
-    async def get_all(self, task_id: str) -> Dict[str, Any]:
+    async def get_all(self, task_id: str) -> dict[str, Any]:
         return dict(await self.backend.load(task_id))
 
     async def set(self, task_id: str, key: str, value: Any) -> None:
@@ -83,16 +83,16 @@ class VarsStore:
         # return new value if present
         return int(out.get(key, 0)) if isinstance(out.get(key), int) else 0
 
-    async def apply_ops(self, task_id: str, ops: list[dict[str, Any]]) -> Dict[str, Any]:
+    async def apply_ops(self, task_id: str, ops: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Apply a list of VarOps atomically (best effort with CAS retries).
         Returns the resulting variables map (as seen by the successful write).
         """
         retries = 0
         while True:
-            latest: Dict[str, Any] = {}
+            latest: dict[str, Any] = {}
 
-            def _updater(cur: Dict[str, Any]) -> Dict[str, Any]:
+            def _updater(cur: dict[str, Any]) -> dict[str, Any]:
                 # We mutate a copy provided by backend.
                 latest.clear()
                 latest.update(cur)

@@ -13,8 +13,9 @@ Concrete implementations (e.g., Kafka) live in their own modules and may offer
 additional knobs via their constructors, but must satisfy these protocols.
 """
 
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import AsyncIterator, Mapping, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from ..protocol.messages import Envelope
 

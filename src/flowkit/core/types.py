@@ -12,17 +12,17 @@ Guidelines:
 - Avoid importing application-level models here.
 """
 
-from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Tuple, Union, Final
-from pathlib import Path
 import os
-
+from collections.abc import Mapping, MutableMapping
+from pathlib import Path
+from typing import Any, Final, Union
 
 # ---- JSON-like value aliases -------------------------------------------------
 
 JSONScalar = Union[str, int, float, bool, None]
 JSONValue = Union[JSONScalar, "JSONArray", "JSONDict"]
-JSONArray = List[JSONValue]
-JSONDict = Dict[str, JSONValue]
+JSONArray = list[JSONValue]
+JSONDict = dict[str, JSONValue]
 
 # Read-only views
 ROJSONDict = Mapping[str, JSONValue]

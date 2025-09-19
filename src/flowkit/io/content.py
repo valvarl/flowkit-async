@@ -9,15 +9,16 @@ drift with `flowkit.api.streams`. Instead, we re-export those types and provide
 small helpers used by compile-time validation and logging.
 """
 
-from typing import Any, Mapping, MutableMapping, Optional, Union, overload
+from collections.abc import Mapping
+from typing import Any, overload
 
 from ..api.streams import ContentKind, FrameDescriptor
 
 __all__ = [
     "ContentKind",
     "FrameDescriptor",
-    "validate_frame_descriptor",
     "describe_frame",
+    "validate_frame_descriptor",
 ]
 
 
@@ -47,7 +48,7 @@ def validate_frame_descriptor(fd: None | Mapping[str, Any] | FrameDescriptor) ->
         if isinstance(kind, str):
             try:
                 kind_enum = ContentKind(kind)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 raise ValueError(f"unsupported frame.kind: {kind!r}") from e
         elif isinstance(kind, ContentKind):
             kind_enum = kind

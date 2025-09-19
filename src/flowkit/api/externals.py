@@ -9,8 +9,9 @@ HTTP endpoints, secrets, locks, ratelimits, etc). Providers resolve config into
 runtime handles usable by adapters/hooks/expressions.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 class ExternalError(Exception):
@@ -26,7 +27,7 @@ class ExternalReady:
     """
 
     ready: bool
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 # -- Typed handles for common external kinds ---------------------------------
@@ -47,7 +48,7 @@ class HttpEndpoint:
 
     base_url: str
     headers: Mapping[str, str] | None = None
-    timeout_ms: Optional[int] = None
+    timeout_ms: int | None = None
 
 
 @dataclass(frozen=True)

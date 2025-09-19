@@ -8,9 +8,9 @@ The registry is the extension discovery hub used by the compiler and runtime to
 resolve adapter names, hook actions, and external providers.
 """
 
-from typing import Any, Mapping
+from typing import Any
 
-from .adapters import SourceAdapter, OutputAdapter, TransformOp, Plugin
+from .adapters import OutputAdapter, Plugin, SourceAdapter, TransformOp
 from .errors import FlowkitError
 
 

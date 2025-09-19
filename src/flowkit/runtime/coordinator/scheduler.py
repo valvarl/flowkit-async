@@ -15,9 +15,8 @@ Design notes:
 - Each "item" represents a (task_id, node_id) to run once.
 """
 
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Iterable, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -26,8 +25,8 @@ class QueueItem:
     node_id: str
     step_type: str
     priority: int = 0
-    concurrency_key: Optional[str] = None
-    concurrency_limit: Optional[int] = None
+    concurrency_key: str | None = None
+    concurrency_limit: int | None = None
 
 
 class Scheduler:
@@ -35,11 +34,11 @@ class Scheduler:
 
     def __init__(self) -> None:
         # priority -> key -> queue[item...]
-        self._queues: Dict[int, Dict[str, Deque[QueueItem]]] = defaultdict(lambda: defaultdict(deque))
+        self._queues: dict[int, dict[str, deque[QueueItem]]] = defaultdict(lambda: defaultdict(deque))
         # current running counters per key
-        self._inflight_by_key: Dict[str, int] = defaultdict(int)
+        self._inflight_by_key: dict[str, int] = defaultdict(int)
         # round-robin cursor per priority over keys
-        self._rr_idx: Dict[int, int] = defaultdict(int)
+        self._rr_idx: dict[int, int] = defaultdict(int)
 
     # ---- enqueue / cancel
 
@@ -52,7 +51,7 @@ class Scheduler:
         removed = 0
         for prio, by_key in self._queues.items():
             for key, q in by_key.items():
-                keep: Deque[QueueItem] = deque()
+                keep: deque[QueueItem] = deque()
                 while q:
                     it = q.popleft()
                     if it.task_id == task_id and it.node_id == node_id:
@@ -64,7 +63,7 @@ class Scheduler:
 
     # ---- release inflight (should be called by Coordinator on finish/fail/cancel)
 
-    def release(self, concurrency_key: Optional[str]) -> None:
+    def release(self, concurrency_key: str | None) -> None:
         if not concurrency_key:
             return
         cur = self._inflight_by_key.get(concurrency_key, 0)
@@ -104,7 +103,7 @@ class Scheduler:
 
     # ---- helpers
 
-    def _cur_limit(self, key: Optional[str], want_limit: Optional[int]) -> Tuple[int, int]:
+    def _cur_limit(self, key: str | None, want_limit: int | None) -> tuple[int, int]:
         if not key or not want_limit:
             return (0, 1)  # effectively limitless (treated as available)
         return (self._inflight_by_key.get(key, 0), want_limit)

@@ -18,21 +18,21 @@ Design goals:
   nothing is redacted).
 """
 
-from typing import Any, Mapping, MutableMapping, Iterable, Tuple, Union, cast
 import logging
+from collections.abc import Mapping
+from typing import Any, cast
 
 from ..core import logging as corelog
 from ..security.redaction import Redactor, redact_obj
 
-
 __all__ = [
-    "setup_logging",
-    "install_redaction_filter",
     "bind_context",
-    "log_context",
-    "get_logger",
-    "set_level",
     "configure_from_env",
+    "get_logger",
+    "install_redaction_filter",
+    "log_context",
+    "set_level",
+    "setup_logging",
 ]
 
 
@@ -59,7 +59,7 @@ class _RedactionFilter(logging.Filter):
         super().__init__()
         self._redactor = redactor
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+    def filter(self, record: logging.LogRecord) -> bool:
         # 1) redact msg
         if isinstance(record.msg, str):
             record.msg = self._redactor.redact_text(record.msg)
@@ -70,7 +70,7 @@ class _RedactionFilter(logging.Filter):
         # 2) redact args (tuple or dict used for %-style formatting)
         if isinstance(record.args, tuple):
             record.args = tuple(
-                redact_obj(a, redactor=self._redactor, in_place=False) for a in cast(Tuple[Any, ...], record.args)
+                redact_obj(a, redactor=self._redactor, in_place=False) for a in cast(tuple[Any, ...], record.args)
             )
         elif isinstance(record.args, Mapping):
             record.args = redact_obj(cast(Mapping[str, Any], record.args), redactor=self._redactor, in_place=False)

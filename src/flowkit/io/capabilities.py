@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+
+from typing import Any, Literal, TypedDict
 
 """
 Static adapter capability descriptors used for compile-time checks.
@@ -11,8 +12,8 @@ Notes:
 """
 
 __all__ = [
-    "AdapterCaps",
     "KNOWN_ADAPTER_CAPS",
+    "AdapterCaps",
     "get_caps",
 ]
 
@@ -28,13 +29,13 @@ class AdapterCaps(TypedDict, total=False):
         consumes: for outputs (sinks), what content kinds are consumed.
     """
 
-    supports_select: List[Literal["batches", "final"]]
-    produces: Dict[str, Any]  # e.g. {"content": ["BATCH"], "frames": ["jsonl","csv"]}
-    consumes: Dict[str, Any]  # e.g. {"content": ["BATCH","BYTES"], "frames": ["parquet"]}
+    supports_select: list[Literal["batches", "final"]]
+    produces: dict[str, Any]  # e.g. {"content": ["BATCH"], "frames": ["jsonl","csv"]}
+    consumes: dict[str, Any]  # e.g. {"content": ["BATCH","BYTES"], "frames": ["parquet"]}
 
 
 # Extend as your adapters grow.
-KNOWN_ADAPTER_CAPS: Dict[str, AdapterCaps] = {
+KNOWN_ADAPTER_CAPS: dict[str, AdapterCaps] = {
     # ---- input adapters
     "pull.from_artifacts": {
         "supports_select": ["batches", "final"],
@@ -61,6 +62,6 @@ KNOWN_ADAPTER_CAPS: Dict[str, AdapterCaps] = {
 }
 
 
-def get_caps(name: str) -> Optional[AdapterCaps]:
+def get_caps(name: str) -> AdapterCaps | None:
     """Return capability descriptor for a known adapter or None if unknown."""
     return KNOWN_ADAPTER_CAPS.get(name)

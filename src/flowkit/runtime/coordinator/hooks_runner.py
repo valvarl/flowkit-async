@@ -12,8 +12,9 @@ audit events, notifications, or vars operations.
 """
 
 import time
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any
 
 from ...api.hooks import HookAction, HookContext, HookEvent
 from ...api.registry import PluginRegistry
@@ -23,16 +24,16 @@ from ...core.logging import get_logger
 @dataclass(frozen=True)
 class HookSelector:
     on: str
-    source: Optional[str] = None
-    output: Optional[str] = None
-    every_n: Optional[int] = None
-    throttle_sec: Optional[int] = None
+    source: str | None = None
+    output: str | None = None
+    every_n: int | None = None
+    throttle_sec: int | None = None
 
 
 @dataclass
 class _CompiledHook:
     selector: HookSelector
-    actions: List[HookAction]
+    actions: list[HookAction]
 
 
 class HooksRunner:
@@ -48,8 +49,8 @@ class HooksRunner:
         self._counters: MutableMapping[str, int] = {}
         self._last_ts: MutableMapping[str, float] = {}
 
-    def compile_node_hooks(self, hooks_spec: Iterable[Mapping[str, Any]]) -> List[_CompiledHook]:
-        compiled: List[_CompiledHook] = []
+    def compile_node_hooks(self, hooks_spec: Iterable[Mapping[str, Any]]) -> list[_CompiledHook]:
+        compiled: list[_CompiledHook] = []
         for h in hooks_spec:
             when = h.get("when") or {}
             selector = HookSelector(
@@ -59,7 +60,7 @@ class HooksRunner:
                 every_n=when.get("every_n"),
                 throttle_sec=int((when.get("throttle") or {}).get("seconds", 0)) or None,
             )
-            actions: List[HookAction] = []
+            actions: list[HookAction] = []
             for a in h.get("actions", []):
                 t = a.get("type", "")
                 cls = self._registry.hook_action(t)  # may raise if unknown
@@ -130,7 +131,7 @@ class HooksRunner:
 
     def _find_action_args(
         self, sel: HookSelector, on: str, source: str | None, output: str | None, node_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # Coordinator-side hooks usually keep args in the spec per action; since the compiled form
         # already resolved them into the action instance (via registry), action classes can take
         # their own defaults. This helper exists for future extension if you want to feed per-event args.

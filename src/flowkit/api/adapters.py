@@ -10,12 +10,12 @@ executed by FlowKit.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncIterator, Iterable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from .errors import FlowkitError
-from .streams import Batch, Item, FrameDescriptor, Checkpoint, ContentKind
+from .streams import Batch, Checkpoint, ContentKind, Item
 
 
 class AdapterKind(str, Enum):
@@ -61,7 +61,7 @@ class AdapterContext:
     vars: Mapping[str, Any]
     externals: Mapping[str, Any]
     cancel_flag: Any  # asyncio.Event-like
-    deadline_ms: Optional[int]
+    deadline_ms: int | None
     checkpoint_store: Any  # runtime/worker/checkpoints.CheckpointsStore
     logger: Any
     clock: Any
@@ -84,8 +84,8 @@ class SourceAdapter(Protocol):
 
     async def open(self, ctx: AdapterContext, spec: Mapping[str, Any]) -> None: ...
     def __aiter__(self) -> AsyncIterator[Item | Batch]: ...
-    async def ack(self, checkpoint: Optional[Checkpoint]) -> None: ...
-    async def nack(self, error: Optional[BaseException] = None) -> None: ...
+    async def ack(self, checkpoint: Checkpoint | None) -> None: ...
+    async def nack(self, error: BaseException | None = None) -> None: ...
     async def close(self) -> None: ...
 
 
@@ -119,7 +119,7 @@ class OutputAdapter(Protocol):
     capabilities: Capabilities
 
     async def open(self, ctx: AdapterContext, spec: Mapping[str, Any]) -> None: ...
-    async def send(self, x: Item | Batch, *, idempotency_key: Optional[str] = None) -> None: ...
+    async def send(self, x: Item | Batch, *, idempotency_key: str | None = None) -> None: ...
     async def flush(self) -> None: ...
     async def close(self) -> None: ...
 
@@ -150,11 +150,11 @@ class Plugin(ABC):
 
 
 __all__ = [
+    "AdapterContext",
     "AdapterKind",
     "Capabilities",
-    "AdapterContext",
-    "SourceAdapter",
     "OutputAdapter",
-    "TransformOp",
     "Plugin",
+    "SourceAdapter",
+    "TransformOp",
 ]

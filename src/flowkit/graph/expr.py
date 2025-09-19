@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-"""
+r"""
 Minimal, safe, deterministic boolean expression engine.
 
 Supported grammar (EBNF-ish):
@@ -26,11 +26,11 @@ This module is intentionally minimal; templates like {{...}} are resolved outsid
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from .expr_funcs import FunctionRegistry, get_default_functions
 
-__all__ = ["ExprError", "Expr", "parse_expr"]
+__all__ = ["Expr", "ExprError", "parse_expr"]
 
 
 # ---- tokenizer
@@ -70,8 +70,8 @@ class _Tok:
         return f"{self.kind}:{self.value!r}"
 
 
-def _lex(s: str) -> List["._Tok"]:
-    out: List[_Tok] = []
+def _lex(s: str) -> list["._Tok"]:
+    out: list[_Tok] = []
     pos = 0
     while pos < len(s):
         m = _TOKEN_RE.match(s, pos)
@@ -102,17 +102,17 @@ class Expr:
 
     kind: str
     value: Any = None
-    children: Tuple["Expr", ...] = ()
+    children: tuple[Expr, ...] = ()
 
     # --- analysis helpers
 
-    def collect_parent_signals(self) -> Dict[str, set]:
+    def collect_parent_signals(self) -> dict[str, set]:
         """Collect references like <parent>.done / <parent>.batch."""
-        acc: Dict[str, set] = {}
+        acc: dict[str, set] = {}
         self._walk_collect_parent_signals(self, acc)
         return acc
 
-    def _walk_collect_parent_signals(self, node: "Expr", acc: Dict[str, set]) -> None:
+    def _walk_collect_parent_signals(self, node: Expr, acc: dict[str, set]) -> None:
         if node.kind == "PATH" and isinstance(node.value, tuple) and len(node.value) >= 2:
             a, b = node.value[0], node.value[1]
             if isinstance(a, str) and isinstance(b, str) and b in {"done", "batch", "failed", "exists"}:
@@ -126,7 +126,7 @@ class Expr:
         self._walk_collect_externals(self, acc)
         return acc
 
-    def _walk_collect_externals(self, node: "Expr", acc: set) -> None:
+    def _walk_collect_externals(self, node: Expr, acc: set) -> None:
         if node.kind == "PATH" and isinstance(node.value, tuple) and len(node.value) >= 2:
             parts = node.value
             if parts[0] == "external" and isinstance(parts[1], str):
@@ -136,7 +136,7 @@ class Expr:
 
     # --- evaluation
 
-    def eval(self, env: Dict[str, Any], *, fns: FunctionRegistry | None = None) -> Any:
+    def eval(self, env: dict[str, Any], *, fns: FunctionRegistry | None = None) -> Any:
         """Evaluate the AST against an environment mapping."""
         if fns is None:
             fns = get_default_functions()
@@ -181,7 +181,7 @@ class Expr:
 
 
 class _Parser:
-    def __init__(self, tokens: List[_Tok]):
+    def __init__(self, tokens: list[_Tok]):
         self.toks = tokens
         self.i = 0
 
@@ -257,7 +257,7 @@ class _Parser:
 
     def parse_ident_based(self) -> Expr:
         # path or function call
-        parts: List[str] = [self.eat("IDENT").value]
+        parts: list[str] = [self.eat("IDENT").value]
         while self.peek().kind == "DOT":
             self.eat("DOT")
             seg = self.eat("IDENT").value
@@ -266,7 +266,7 @@ class _Parser:
         if self.peek().kind == "LPAREN":
             # function call
             self.eat("LPAREN")
-            args: List[Expr] = []
+            args: list[Expr] = []
             if self.peek().kind != "RPAREN":
                 args.append(self.parse_or())
                 while self.peek().kind == "COMMA":

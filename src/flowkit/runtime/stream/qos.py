@@ -8,12 +8,10 @@ Everything here is lock-free and allocation-light to live on the hot path.
 """
 
 from dataclasses import dataclass
-from typing import Optional
-
 
 __all__ = [
-    "BackpressureController",
     "AdaptiveChunkSizer",
+    "BackpressureController",
     "TokenBucket",
 ]
 
@@ -96,7 +94,7 @@ class AdaptiveChunkSizer:
         """Current chunk size to request/accumulate."""
         return self._n
 
-    def on_result(self, *, latency_ms: int, blocked: bool, size_bytes: Optional[int] = None) -> None:
+    def on_result(self, *, latency_ms: int, blocked: bool, size_bytes: int | None = None) -> None:
         """
         Update heuristics based on the last chunk execution.
         """

@@ -16,8 +16,8 @@ Design notes:
 - Starting the server will be a no-op when the client is not available.
 """
 
-from typing import Any, Mapping, Sequence, Iterable, Optional, Dict
-import logging
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from ..core.logging import get_logger, warn_once
 
@@ -28,10 +28,10 @@ except Exception:  # pragma: no cover - any import error -> fallback
     _prom = None  # type: ignore[assignment]
 
 __all__ = [
-    "get_registry",
     "MetricsService",
     "SafeCounter",
     "SafeHistogram",
+    "get_registry",
 ]
 
 
@@ -42,20 +42,20 @@ _log = get_logger("observability.metrics")
 
 
 class _NoopChild:
-    def inc(self, amount: float = 1.0) -> None:  # noqa: D401
+    def inc(self, amount: float = 1.0) -> None:
         return
 
-    def observe(self, amount: float) -> None:  # noqa: D401
+    def observe(self, amount: float) -> None:
         return
 
 
 class _NoopMetric:
-    def labels(self, **labels: str) -> _NoopChild:  # noqa: D401
+    def labels(self, **labels: str) -> _NoopChild:
         return _NoopChild()
 
 
 class _NoopRegistry:
-    def register(self, *_: Any, **__: Any) -> None:  # noqa: D401
+    def register(self, *_: Any, **__: Any) -> None:
         return
 
 

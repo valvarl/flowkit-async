@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-from typing import Any, Mapping, Optional
+
+from typing import Any
 
 from ...api.registry import PluginRegistry
-from ...api.streams import Item, Batch
+from ...api.streams import Batch, Item
 
 
 class WorkerHooksRunner:
@@ -16,7 +17,7 @@ class WorkerHooksRunner:
       - "engine.error"  (args: error, stage, node, task)
     """
 
-    def __init__(self, registry: Optional[PluginRegistry] = None) -> None:
+    def __init__(self, registry: PluginRegistry | None = None) -> None:
         self._registry = registry
 
     async def emit_source_item(self, *, item: Item | Batch, source_alias: str, node_id: str, task_id: str) -> None:

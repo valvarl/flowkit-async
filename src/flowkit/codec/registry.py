@@ -1,17 +1,17 @@
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
+from typing import Protocol
 
 from ..io.content import ContentKind, FrameDescriptor
 from ..worker.handlers.base import Batch
 
-
 __all__ = [
     "Codec",
     "CodecsRegistry",
-    "get_default_codecs",
     "JsonLinesCodec",
+    "get_default_codecs",
 ]
 
 
@@ -24,7 +24,7 @@ class Codec(Protocol):
     name: str
 
     def can_handle(self, kind: ContentKind, frame: FrameDescriptor | None) -> bool: ...
-    def encode(self, batch: Batch) -> Tuple[bytes, FrameDescriptor]:
+    def encode(self, batch: Batch) -> tuple[bytes, FrameDescriptor]:
         """Преобразует batch.items (или batch.blob) в (blob, frame).
 
         Должен:
@@ -51,7 +51,7 @@ class JsonLinesCodec:
             return False
         return frame.kind.lower() in ("jsonl", "json_lines", "ndjson")
 
-    def encode(self, batch: Batch) -> Tuple[bytes, FrameDescriptor]:
+    def encode(self, batch: Batch) -> tuple[bytes, FrameDescriptor]:
         if batch.content_kind not in (ContentKind.BATCH, ContentKind.RECORD):
             raise ValueError("jsonl.encode: ожидается BATCH|RECORD")
         if batch.items:
@@ -101,7 +101,7 @@ class CodecsRegistry:
 
     # Удобные шорткаты
 
-    def encode_to_blob(self, batch: Batch) -> Tuple[bytes, FrameDescriptor]:
+    def encode_to_blob(self, batch: Batch) -> tuple[bytes, FrameDescriptor]:
         """Возвращает (blob, frame), поднимая исключение если подходящего кодека нет."""
         codec = self.find(batch.content_kind, batch.frame)
         if not codec:

@@ -13,12 +13,13 @@ This is a pure function layer over the compiled ExecutionPlan:
 The planner never mutates storage; it produces decisions for the scheduler.
 """
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any
 
-from ...graph.compiler import ExecutionPlan
-from ...graph.expr import parse_expr, Expr
 from ...core.time import Clock, SystemClock
+from ...graph.compiler import ExecutionPlan
+from ...graph.expr import Expr, parse_expr
 
 
 @dataclass(frozen=True)
@@ -62,13 +63,13 @@ class EdgeDecision:
     """Result for a single dynamic edge."""
 
     enabled: bool
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 class Planner:
     """Stateless evaluator over an ExecutionPlan."""
 
-    def __init__(self, *, plan: ExecutionPlan, clock: Optional[Clock] = None) -> None:
+    def __init__(self, *, plan: ExecutionPlan, clock: Clock | None = None) -> None:
         self.plan = plan
         self.clock = clock or SystemClock()
 
@@ -78,7 +79,7 @@ class Planner:
         sp = self.plan.start_policy.get(node_id)
         if not sp:
             # default to 'all parents done'
-            if all((ctx.parents.get(p, ParentSnapshot()).done for p in self.plan.parents_by_child.get(node_id, []))):
+            if all(ctx.parents.get(p, ParentSnapshot()).done for p in self.plan.parents_by_child.get(node_id, [])):
                 return StartDecision(True, False)
             return StartDecision(False, False, reasons=("waiting:parents",))
 
@@ -122,7 +123,7 @@ class Planner:
             return EdgeDecision(True)
         try:
             ok = bool(self._eval(cond, ctx))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return EdgeDecision(False, reason=f"expr_error:{e}")
         return EdgeDecision(ok)
 
@@ -136,7 +137,7 @@ class Planner:
     def _eval(self, text: str, ctx: EvalContext) -> Any:
         """Evaluate expression text using the graph's safe expression engine."""
         ast: Expr = parse_expr(text)
-        env: Dict[str, Any] = {
+        env: dict[str, Any] = {
             # parents.<id>.<predicate>
             **{
                 pid: {"done": p.done, "failed": p.failed, "batch": p.batch, "exists": p.exists}

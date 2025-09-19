@@ -9,14 +9,14 @@ This module is intentionally best-effort and non-fatal: it validates the
 Future: content/frame compatibility once adapters declare richer capabilities.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from ..io.capabilities import get_caps  # expected to exist in flowkit/io/capabilities.py
 
 __all__ = ["validate_io_compat"]
 
 
-def _ok_select(adapter_name: str, select: str) -> Tuple[bool, str | None]:
+def _ok_select(adapter_name: str, select: str) -> tuple[bool, str | None]:
     caps = get_caps(adapter_name)
     if not caps:
         # unknown adapters are allowed (userland), skip strict validation
@@ -27,9 +27,9 @@ def _ok_select(adapter_name: str, select: str) -> Tuple[bool, str | None]:
     return True, None
 
 
-def validate_io_compat(node_io: Dict[str, Any]) -> List[str]:
+def validate_io_compat(node_io: dict[str, Any]) -> list[str]:
     """Return a list of human-readable warnings/errors (non-fatal)."""
-    problems: List[str] = []
+    problems: list[str] = []
     if not node_io:
         return problems
 

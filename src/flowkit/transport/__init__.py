@@ -11,6 +11,6 @@ from .kafka_bus import KafkaBus
 __all__ = [
     "Bus",
     "Consumer",
-    "Received",
     "KafkaBus",
+    "Received",
 ]

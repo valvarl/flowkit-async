@@ -17,10 +17,10 @@ The main entry points:
 - `Redactor.redact_text(s)`: scrub likely tokens from free text (best-effort).
 """
 
-from typing import Any, Mapping, MutableMapping, Iterable, Sequence, Dict, List
 import math
 import re
-
+from collections.abc import Iterable, MutableMapping
+from typing import Any
 
 __all__ = [
     "Redactor",
@@ -59,7 +59,7 @@ def _entropy_bits_per_char(s: str) -> float:
     """
     if not s:
         return 0.0
-    freq: Dict[str, int] = {}
+    freq: dict[str, int] = {}
     for ch in s:
         freq[ch] = freq.get(ch, 0) + 1
     H = 0.0
@@ -95,8 +95,8 @@ class Redactor:
         min_token_len: int = 16,
         replacement: str = "***",
     ) -> None:
-        self.sensitive_keys = frozenset((k.lower() for k in (sensitive_keys or _DEFAULT_SENSITIVE_KEYS)))
-        self.key_regexes: List[re.Pattern[str]] = [re.compile(r, re.IGNORECASE) for r in (key_regexes or [])]
+        self.sensitive_keys = frozenset(k.lower() for k in (sensitive_keys or _DEFAULT_SENSITIVE_KEYS))
+        self.key_regexes: list[re.Pattern[str]] = [re.compile(r, re.IGNORECASE) for r in (key_regexes or [])]
         self.entropy_threshold = float(entropy_threshold_bits_per_char)
         self.min_token_len = int(min_token_len)
         self.replacement = replacement

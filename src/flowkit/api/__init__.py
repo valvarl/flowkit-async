@@ -9,59 +9,58 @@ outputs (destinations), externals, hook actions, and expression-based integratio
 """
 
 # Errors
-from .errors import (
-    FlowkitError,
-    RetryableError,
-    PermanentError,
-    CancelledError,
-    DeadlineExceeded,
-    SchemaMismatch,
-    NotReady,
-    Backpressure,
-)
-
-# Streams / content model
-from .streams import (
-    ContentKind,
-    FrameDescriptor,
-    Checkpoint,
-    Item,
-    Batch,
-    Ack,
-    Nack,
-)
-
 # Adapter & transform contracts
 from .adapters import (
+    AdapterContext,
     AdapterKind,
     Capabilities,
-    AdapterContext,
-    SourceAdapter,
     OutputAdapter,
-    TransformOp,
     Plugin,
+    SourceAdapter,
+    TransformOp,
 )
-
-# Externals
-from .externals import (
-    ExternalError,
-    ExternalReady,
-    ExternalProvider,
-    KafkaTopic,
-    HttpEndpoint,
-    SecretStore,
-    DistributedLock,
-    RateLimiter,
+from .errors import (
+    Backpressure,
+    CancelledError,
+    DeadlineExceeded,
+    FlowkitError,
+    NotReady,
+    PermanentError,
+    RetryableError,
+    SchemaMismatch,
 )
-
-# Hooks
-from .hooks import HookEvent, HookContext, HookAction, HookSelector
 
 # Expressions
 from .expr import Expr, ExprError, compile_expr, eval_expr
 
+# Externals
+from .externals import (
+    DistributedLock,
+    ExternalError,
+    ExternalProvider,
+    ExternalReady,
+    HttpEndpoint,
+    KafkaTopic,
+    RateLimiter,
+    SecretStore,
+)
+
+# Hooks
+from .hooks import HookAction, HookContext, HookEvent, HookSelector
+
 # Registry
 from .registry import PluginRegistry
+
+# Streams / content model
+from .streams import (
+    Ack,
+    Batch,
+    Checkpoint,
+    ContentKind,
+    FrameDescriptor,
+    Item,
+    Nack,
+)
 
 __all__ = [
     # errors

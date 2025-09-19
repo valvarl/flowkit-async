@@ -8,8 +8,9 @@ Hooks allow users to run side effects (emit metrics, HTTP POST, Kafka publish,
 vars operations, etc.) on lifecycle events produced by Coordinator/Worker.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,8 @@ class HookSelector:
     """
 
     on: str
-    source: Optional[str] = None
-    output: Optional[str] = None
+    source: str | None = None
+    output: str | None = None
 
     def matches(self, event: HookEvent) -> bool:
         if self.on != event.on:

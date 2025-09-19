@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Mapping, Optional, Iterable, AsyncIterator, Union, List
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, Union
 
-from ...api.adapters import SourceAdapter, SinkAdapter, AdapterContext
+from ...api.adapters import AdapterContext, SourceAdapter
 from ...api.registry import PluginRegistry
-from ...api.streams import Item, Batch, Checkpoint
-from ...api.errors import FlowkitError
-from ..stream.merge import get_default_merge_registry, SourceState
+from ...api.streams import Batch, Checkpoint, Item
+from .checkpoints import CheckpointsStore
+from .hooks_runner import WorkerHooksRunner
+from .metrics import WorkerMetrics
 from .ops_runner import OpsChain
 from .outputs_runner import SinksRunner
-from .hooks_runner import WorkerHooksRunner
-from .checkpoints import CheckpointsStore
-from .metrics import WorkerMetrics
-
 
 StreamEl = Union[Item, Batch]
 
@@ -44,8 +42,8 @@ class StreamEngine:
         registry: PluginRegistry,
         ctx: AdapterContext,
         *,
-        hooks: Optional[WorkerHooksRunner] = None,
-        metrics: Optional[WorkerMetrics] = None,
+        hooks: WorkerHooksRunner | None = None,
+        metrics: WorkerMetrics | None = None,
         queue_maxsize: int = 1024,
     ) -> None:
         self._registry = registry
@@ -53,18 +51,18 @@ class StreamEngine:
         self._hooks = hooks or WorkerHooksRunner(registry=registry)
         self._metrics = metrics or WorkerMetrics()
 
-        self._sources: list[tuple[str, SourceAdapter, Optional[str]]] = []  # (alias, adapter, checkpoint_key)
+        self._sources: list[tuple[str, SourceAdapter, str | None]] = []  # (alias, adapter, checkpoint_key)
         self._ops = OpsChain(ctx)
         self._sinks = SinksRunner(ctx)
 
         self._merge_name: str = "interleave"
-        self._queue: asyncio.Queue[tuple[StreamEl, Optional[Checkpoint], Optional[str], Optional[str]]] = asyncio.Queue(
+        self._queue: asyncio.Queue[tuple[StreamEl, Checkpoint | None, str | None, str | None]] = asyncio.Queue(
             maxsize=max(1, queue_maxsize)
         )
         self._tasks: list[asyncio.Task] = []
         self._running = False
 
-        self._ckpt_store: Optional[CheckpointsStore] = None
+        self._ckpt_store: CheckpointsStore | None = None
 
     async def build_from_plan(self, plan: Mapping[str, Any]) -> None:
         """
@@ -151,13 +149,13 @@ class StreamEngine:
 
     # ---- internal ------------------------------------------------------------
 
-    async def _run_source(self, alias: str, adapter: SourceAdapter, checkpoint_key: Optional[str]) -> None:
+    async def _run_source(self, alias: str, adapter: SourceAdapter, checkpoint_key: str | None) -> None:
         """
         Read from a source, pass through ops chain, and enqueue to the central queue.
         Keeps backpressure by awaiting `put` on the bounded queue.
         """
         # Try to read the last checkpoint
-        ckpt: Optional[Checkpoint] = None
+        ckpt: Checkpoint | None = None
         if checkpoint_key and self._ckpt_store:
             ckpt = await self._ckpt_store.read(checkpoint_key)
 
@@ -222,7 +220,7 @@ def _create_source(registry: PluginRegistry, name: str, ctx: AdapterContext, arg
     raise LookupError(f"source '{name}' is not registered")
 
 
-def _source_stream(adapter: SourceAdapter, ctx: AdapterContext, ckpt: Optional[Checkpoint]) -> AsyncIterator[Any]:
+def _source_stream(adapter: SourceAdapter, ctx: AdapterContext, ckpt: Checkpoint | None) -> AsyncIterator[Any]:
     """
     Resolve a common streaming interface across adapters:
 
@@ -239,7 +237,7 @@ def _source_stream(adapter: SourceAdapter, ctx: AdapterContext, ckpt: Optional[C
     raise TypeError(f"source adapter {adapter!r} does not provide a streaming method")
 
 
-def _unpack_source_payload(x: Any) -> tuple[StreamEl, Optional[Checkpoint], Optional[str]]:
+def _unpack_source_payload(x: Any) -> tuple[StreamEl, Checkpoint | None, str | None]:
     """
     Normalize source output into (element, checkpoint, idempotency_key).
     Supported shapes:

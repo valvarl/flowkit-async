@@ -17,13 +17,13 @@ Design notes:
 - Resolver is DB/bus-agnostic and does not import heavy deps.
 """
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Optional, Tuple
+from typing import Any
 
+from ..api.externals import ExternalProvider, ExternalReady
 from ..core.logging import get_logger
 from ..core.utils import stable_hash
-from ..api.externals import ExternalProvider, ExternalReady, ExternalError
-
 
 # -----------------------------
 # Factory type & built-ins
@@ -70,7 +70,7 @@ class _GenericExternal(ExternalProvider):
 def merge_declared(
     graph_level: Mapping[str, Mapping[str, Any]] | None,
     node_level: Mapping[str, Mapping[str, Any]] | None,
-) -> Dict[str, Dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     """
     Merge graph-level and node-level externals with override semantics.
 
@@ -84,7 +84,7 @@ def merge_declared(
 
     Returns: new dict suitable for resolution (JSON-serializable).
     """
-    out: Dict[str, Dict[str, Any]] = {k: dict(v) for k, v in (graph_level or {}).items()}
+    out: dict[str, dict[str, Any]] = {k: dict(v) for k, v in (graph_level or {}).items()}
     for name, local_cfg in (node_level or {}).items():
         base = out.get(name, {})
         merged = dict(base)
@@ -151,11 +151,11 @@ class ExternalsResolver:
         self._log = get_logger("externals.resolver")
         self._strict = bool(strict_kinds)
         # factories by kind
-        self._factories: Dict[str, ExternalFactory] = dict(factories or {})
+        self._factories: dict[str, ExternalFactory] = dict(factories or {})
         # cache: fp -> _Cached
-        self._cache: Dict[str, _Cached] = {}
+        self._cache: dict[str, _Cached] = {}
         # reverse name index (name -> fp) to support targeted release
-        self._name_to_fp: Dict[str, str] = {}
+        self._name_to_fp: dict[str, str] = {}
 
         # register a generic fallback (only used when not strict)
         self._generic_factory: ExternalFactory = lambda name, kind, cfg: _GenericExternal(name, kind, cfg)
@@ -180,13 +180,13 @@ class ExternalsResolver:
 
     # ---- acquire / release
 
-    async def acquire(self, declared: Mapping[str, Mapping[str, Any]]) -> Dict[str, ExternalProvider]:
+    async def acquire(self, declared: Mapping[str, Mapping[str, Any]]) -> dict[str, ExternalProvider]:
         """
         Resolve and open providers for the given declaration map.
 
         Returns a mapping name -> ExternalProvider. Reuses cached instances if configs match.
         """
-        result: Dict[str, ExternalProvider] = {}
+        result: dict[str, ExternalProvider] = {}
         for name, cfg in declared.items():
             kind = str(cfg.get("kind", "")).strip()
             if not kind:
@@ -256,7 +256,7 @@ class ExternalsResolver:
         self,
         graph_level: Mapping[str, Mapping[str, Any]] | None,
         node_level: Mapping[str, Mapping[str, Any]] | None,
-    ) -> Dict[str, ExternalProvider]:
+    ) -> dict[str, ExternalProvider]:
         """
         Merge + acquire providers for a node overlaying graph-level externals.
         """

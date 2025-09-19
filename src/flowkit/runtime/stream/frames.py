@@ -13,18 +13,18 @@ Heavy/format-specific validation (e.g., schema checks, Parquet footer) is out
 of scope and should be implemented by adapters/transforms/codecs.
 """
 
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import replace
-from typing import Any, Iterable, Mapping, MutableMapping, Optional
+from typing import Any
 
 from ...api.streams import Batch, ContentKind, FrameDescriptor, Item
 
-
 __all__ = [
-    "infer_content_kind",
-    "validate_frame_for_payload",
-    "normalize_item",
-    "normalize_batch",
     "approx_size_bytes",
+    "infer_content_kind",
+    "normalize_batch",
+    "normalize_item",
+    "validate_frame_for_payload",
 ]
 
 
@@ -104,10 +104,10 @@ def approx_size_bytes(x: Any) -> int:
 def normalize_item(
     payload: Any,
     *,
-    meta: Optional[MutableMapping[str, Any]] = None,
-    frame: Optional[FrameDescriptor] = None,
-    port: Optional[str] = None,
-    source_alias: Optional[str] = None,
+    meta: MutableMapping[str, Any] | None = None,
+    frame: FrameDescriptor | None = None,
+    port: str | None = None,
+    source_alias: str | None = None,
 ) -> Item:
     """
     Build a consistent `Item` from arbitrary user/adaptor inputs.
@@ -145,10 +145,10 @@ def _derive_batch_meta(
 def normalize_batch(
     x: Batch | Iterable[Item] | bytes | bytearray | memoryview,
     *,
-    frame: Optional[FrameDescriptor] = None,
-    meta: Optional[MutableMapping[str, Any]] = None,
-    port: Optional[str] = None,
-    source_alias: Optional[str] = None,
+    frame: FrameDescriptor | None = None,
+    meta: MutableMapping[str, Any] | None = None,
+    port: str | None = None,
+    source_alias: str | None = None,
 ) -> Batch:
     """
     Normalize an arbitrary input into a `Batch`.

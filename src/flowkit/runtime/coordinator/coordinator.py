@@ -26,49 +26,48 @@ Design notes:
 import asyncio
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any
 
+from ...core.utils import stable_hash
 from ...graph.compiler import (
-    GraphSpecV21,
     ExecutionPlan,
     prepare_for_task_create_v21,
 )
-from ...runtime.coordinator.planner import (
-    Planner,
-    EvalContext,
-    ParentSnapshot,
-    ExternalSnapshot,
+from ...io.validation import normalize_adapter_args, validate_input_adapter
+from ...protocol.messages import (
+    CmdTaskStart,
+    CommandKind,
+    Envelope,
+    EvBatchFailed,
+    EvBatchOk,
+    EventKind,
+    EvHeartbeat,
+    EvTaskAccepted,
+    EvTaskDone,
+    EvTaskFailed,
+    MsgType,
+    Role,
+    RunState,
 )
-from ...runtime.coordinator.scheduler import Scheduler, QueueItem
-from ...runtime.coordinator.vars_store import VarsStore
 from ...runtime.coordinator.hooks_runner import HooksRunner
 from ...runtime.coordinator.metrics import CoordinatorMetrics
 from ...runtime.coordinator.outbox import OutboxDispatcher
-from ...transport.bus import Bus
-from ...protocol.messages import (
-    Envelope,
-    MsgType,
-    Role,
-    CommandKind,
-    EventKind,
-    RunState,
-    CmdTaskStart,
-    EvTaskAccepted,
-    EvHeartbeat,
-    EvBatchOk,
-    EvBatchFailed,
-    EvTaskDone,
-    EvTaskFailed,
+from ...runtime.coordinator.planner import (
+    EvalContext,
+    ExternalSnapshot,
+    ParentSnapshot,
+    Planner,
 )
-from ...io.validation import normalize_adapter_args, validate_input_adapter
-from ...core.utils import stable_hash
-
-# Storage interfaces (DB-agnostic)
-from ...storage.tasks import TaskStore, TaskDoc, NodeSnapshot
+from ...runtime.coordinator.scheduler import QueueItem, Scheduler
+from ...runtime.coordinator.vars_store import VarsStore
 from ...storage.artifacts import ArtifactStore
 from ...storage.kv import KVStore
-from ...storage.outbox import OutboxStore  # used by OutboxDispatcher (constructed outside)
+
+# Storage interfaces (DB-agnostic)
+from ...storage.tasks import NodeSnapshot, TaskDoc, TaskStore
+from ...transport.bus import Bus
 
 # Optional plugin registry for hooks (your app may bring its own registry)
 try:
@@ -125,12 +124,12 @@ class Coordinator:
         kv: KVStore,
         outbox: OutboxDispatcher,
         bus: Bus,
-        vars_store: Optional[VarsStore] = None,
-        hooks: Optional[HooksRunner] = None,
-        metrics: Optional[CoordinatorMetrics] = None,
-        opts: Optional[CoordinatorOpts] = None,
-        registry: Optional[PluginRegistry] = None,
-        logger: Optional[logging.Logger] = None,
+        vars_store: VarsStore | None = None,
+        hooks: HooksRunner | None = None,
+        metrics: CoordinatorMetrics | None = None,
+        opts: CoordinatorOpts | None = None,
+        registry: PluginRegistry | None = None,
+        logger: logging.Logger | None = None,
     ) -> None:
         self.tasks = tasks
         self.artifacts = artifacts
@@ -381,7 +380,7 @@ class Coordinator:
 
     # ---- internal: helpers ---------------------------------------------------
 
-    def _spawn(self, coro, *, name: Optional[str] = None) -> None:
+    def _spawn(self, coro, *, name: str | None = None) -> None:
         t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
         self._bg.add(t)
 
@@ -431,7 +430,7 @@ class Coordinator:
             return False
         return await self.artifacts.any_ready_from(task_id=doc.task_id, parent_ids=parents)
 
-    async def _build_io_plan(self, doc: TaskDoc, node: NodeSnapshot) -> Optional[Dict[str, Any]]:
+    async def _build_io_plan(self, doc: TaskDoc, node: NodeSnapshot) -> dict[str, Any] | None:
         """
         Produce `input_inline` for CmdTaskStart when applicable.
 
@@ -471,7 +470,7 @@ class Coordinator:
         task: TaskDoc,
         node: NodeSnapshot,
         epoch: int,
-        io_plan: Optional[Dict[str, Any]],
+        io_plan: dict[str, Any] | None,
     ) -> None:
         """Enqueue CmdTaskStart for the given node."""
         cmd = CmdTaskStart(
@@ -659,7 +658,7 @@ class Coordinator:
 # ---- small helpers -----------------------------------------------------------
 
 
-def _runstate(v: Any) -> Optional[RunState]:
+def _runstate(v: Any) -> RunState | None:
     if isinstance(v, RunState):
         return v
     if isinstance(v, str):
@@ -670,7 +669,7 @@ def _runstate(v: Any) -> Optional[RunState]:
     return None
 
 
-def _as_event_kind(v: Any) -> Optional[EventKind]:
+def _as_event_kind(v: Any) -> EventKind | None:
     if isinstance(v, EventKind):
         return v
     if isinstance(v, str):

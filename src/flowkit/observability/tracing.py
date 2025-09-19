@@ -16,9 +16,10 @@ Usage:
     async def tick(): ...
 """
 
-from typing import Any, Callable, Optional, Awaitable, TypeVar, cast
 import asyncio
 import logging
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 from ..core.logging import get_logger, warn_once
 
@@ -30,7 +31,9 @@ try:  # pragma: no cover - avoid hard dep at import time
 
     try:
         # OTLP exporter is optional even with OpenTelemetry installed
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as _OTLPExporter  # type: ignore
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as _OTLPExporter,  # type: ignore
+        )
     except Exception:  # pragma: no cover
         _OTLPExporter = None  # type: ignore
 except Exception:  # pragma: no cover
