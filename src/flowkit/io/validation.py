@@ -1,6 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+"""
+Adapter name/args normalization and capability checks.
+
+Design goals:
+- Keep the validation permissive for userland adapters (unknown names allowed).
+- Provide helpful messages for common mistakes (missing required args, select mismatch).
+- Do not apply runtime defaults here: workers supply adapter defaults via config.
+"""
+
 from typing import Any
+
+from .capabilities import get_caps
+
+__all__ = [
+    "ADAPTER_SPECS",
+    "ARG_ALIAS",
+    "adapter_aliases",
+    "check_select_supported",
+    "normalize_adapter_args",
+    "resolve_adapter_name",
+    "validate_input_adapter",
+    "validate_io_source",
+    "validate_output_adapter",
+]
+
 
 # Canonical adapter registry with aliases and minimal schema.
 # Extend here to add new adapters and argument rules.
@@ -16,6 +41,27 @@ ADAPTER_SPECS: dict[str, dict[str, Any]] = {
         "optional": {"meta_list_key", "from_nodes", "poll_ms", "eof_on_task_done", "backoff_max_ms"},
         # strict mode requires meta_list_key to be a string
         "strict_requires": {"meta_list_key"},
+    },
+    "pull.kafka.subscribe": {
+        "aliases": {"pull.kafka"},
+        "required": set(),
+        "optional": {"group", "client", "topics", "assign", "poll_ms"},
+    },
+    # outputs/sinks can be listed here for name canonicalization (args usually adapter-specific)
+    "push.to_artifacts": {
+        "aliases": {"push.artifacts"},
+        "required": set(),
+        "optional": {"bucket", "prefix", "codec"},
+    },
+    "emit.kafka": {
+        "aliases": {"push.kafka"},
+        "required": set(),
+        "optional": {"external", "topic", "key", "headers"},
+    },
+    "emit.s3": {
+        "aliases": {"push.s3"},
+        "required": set(),
+        "optional": {"bucket", "key_template", "acl"},
     },
 }
 
@@ -62,7 +108,7 @@ def normalize_adapter_args(args: dict[str, Any]) -> tuple[list[str], dict[str, A
 
     # normalize from_nodes to a list[str]
     fn = norm.get("from_nodes", [])
-    if isinstance(fn, list | tuple | set):
+    if isinstance(fn, (list, tuple, set)):
         from_nodes: list[str] = list(fn)
     elif isinstance(fn, str):
         from_nodes = [fn]
@@ -81,19 +127,17 @@ def validate_input_adapter(name: str, all_args: dict[str, Any], *, strict: bool 
     """Shared validation for coordinator and worker (canonicalizes names and checks minimal schema)."""
     canon = resolve_adapter_name(name)
     if not canon:
-        return False, f"unknown adapter '{name}'"
+        # Unknown adapters are allowed; upstream may provide own validation.
+        return True, None
 
     spec = ADAPTER_SPECS[canon]
     required: set[str] = set(spec.get("required", set()))
-    # optional args exist but we intentionally don't enforce/whitelist them here
     strict_requires: set[str] = set(spec.get("strict_requires", set())) if strict else set()
 
-    # required args presence
     missing = [r for r in required if r not in all_args]
     if missing:
         return False, f"missing required args: {missing}"
 
-    # strict-only required args
     if strict:
         missing_strict = [r for r in strict_requires if r not in all_args]
         if missing_strict:
@@ -110,7 +154,39 @@ def validate_input_adapter(name: str, all_args: dict[str, Any], *, strict: bool 
         if strict and not isinstance(mlk, str):
             return False, "strict mode: 'meta_list_key' is required and must be a string"
 
-    # unknown args are allowed here (they may be ignored by adapters), but
-    # you can tighten this later by whitelisting optional+required only.
+    return True, None
 
+
+def check_select_supported(adapter_name: str, select: str) -> tuple[bool, str | None]:
+    """Check that the adapter supports the requested select mode."""
+    caps = get_caps(adapter_name)
+    if not caps:
+        # unknown adapter — skip strict validation
+        return True, None
+    supported = set(caps.get("supports_select", []) or [])
+    if supported and select not in supported:
+        return False, f"adapter {adapter_name!r} does not support select={select!r} (supports: {sorted(supported)})"
+    return True, None
+
+
+def validate_io_source(
+    adapter_name: str, select: str, args: dict[str, Any], *, strict: bool = False
+) -> tuple[bool, str | None]:
+    """Validate a single input source tuple (adapter/select/args)."""
+    ok, err = validate_input_adapter(adapter_name, args, strict=strict)
+    if not ok:
+        return ok, err
+    ok, err = check_select_supported(adapter_name, select)
+    return ok, err
+
+
+def validate_output_adapter(name: str, args: dict[str, Any] | None = None) -> tuple[bool, str | None]:
+    """Validate output adapter reference (name exists or is alias).
+
+    For userland adapters (unknown), we return True to avoid blocking compilation.
+    """
+    canon = resolve_adapter_name(name)
+    if canon:
+        return True, None
+    # Unknown outputs are allowed; coordinator will treat them as userland.
     return True, None

@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+"""
+flowkit.core.config
+===================
+
+Strongly-typed configurations for Coordinator and Worker.
+- No external deps; optional JSON file loading.
+- Derives millisecond fields from seconds to avoid repeated conversions.
+- Provides small env overrides for convenience.
+
+If a config file path is not provided or not found, sane defaults are used.
+"""
+
 import json
 import os
 from dataclasses import dataclass, field
@@ -7,14 +19,37 @@ from pathlib import Path
 from typing import Any
 
 
+def _parse_csv_env(name: str) -> list[str]:
+    val = os.getenv(name)
+    if not val:
+        return []
+    return [s.strip() for s in val.split(",") if s.strip()]
+
+
+def _try_load_json(path: Path | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        # Fail soft (callers may still override)
+        pass
+    return {}
+
+
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class CoordinatorConfig:
     """Coordinator configuration loaded from JSON/env with derived millisecond fields."""
 
-    # ---- Kafka & topics
+    # ---- Bus / Kafka
     kafka_bootstrap: str = "kafka:9092"
     worker_types: list[str] = field(default_factory=lambda: ["indexer", "enricher", "grouper", "analyzer"])
 
+    # ---- Topics
     topic_cmd_fmt: str = "cmd.{type}.v1"
     topic_status_fmt: str = "status.{type}.v1"
     topic_worker_announce: str = "workers.announce.v1"
@@ -22,7 +57,7 @@ class CoordinatorConfig:
     topic_reply: str = "reply.tasks.v1"
     topic_signals: str = "signals.v1"
 
-    # ---- timings (seconds)
+    # ---- Timings (seconds)
     heartbeat_soft_sec: int = 300
     heartbeat_hard_sec: int = 3600
     lease_ttl_sec: int = 45
@@ -33,17 +68,15 @@ class CoordinatorConfig:
     hb_monitor_tick_sec: float = 10.0
     outbox_dispatch_tick_sec: float = 0.25
 
-    # ---- outbox
+    # ---- Outbox
     outbox_max_retry: int = 12
     outbox_backoff_min_ms: int = 250
     outbox_backoff_max_ms: int = 60_000
 
-    # ---- input adapters policy (fail-fast at coordinator)
-    # When True, the coordinator validates input adapters in strict mode,
-    # mirroring WorkerConfig.strict_input_adapters.
+    # ---- Validation policy
     strict_input_adapters: bool = False
 
-    # ---- derived (ms) — computed in __post_init__
+    # ---- Derived (ms)
     hb_soft_ms: int = 0
     hb_hard_ms: int = 0
     lease_ttl_ms: int = 0
@@ -54,7 +87,13 @@ class CoordinatorConfig:
     hb_monitor_tick_ms: int = 0
     outbox_dispatch_tick_ms: int = 0
 
+    # ---- Methods ------------------------------------------------------------
+
     def __post_init__(self) -> None:
+        if not self.kafka_bootstrap:
+            raise ValueError("kafka_bootstrap must be a non-empty string")
+        if not isinstance(self.worker_types, list) or not all(isinstance(x, str) and x for x in self.worker_types):
+            raise ValueError("worker_types must be a list of non-empty strings")
         self._derive_ms()
 
     def _derive_ms(self) -> None:
@@ -69,49 +108,54 @@ class CoordinatorConfig:
         self.hb_monitor_tick_ms = int(self.hb_monitor_tick_sec * 1000)
         self.outbox_dispatch_tick_ms = int(self.outbox_dispatch_tick_sec * 1000)
 
-    # ---- topic helpers
+    # Topic helpers
     def topic_cmd(self, step_type: str) -> str:
         return self.topic_cmd_fmt.format(type=step_type)
 
     def topic_status(self, step_type: str) -> str:
         return self.topic_status_fmt.format(type=step_type)
 
-    # ---- loading
+    # Loader
     @classmethod
-    def load(cls, path: str | Path | None = None, *, overrides: dict[str, Any] | None = None) -> CoordinatorConfig:
-        """Load config from JSON (file or default), then apply env and explicit overrides."""
-        data: dict[str, Any] = {}
-        # 1) base JSON
-        if path:
-            p = Path(path)
-        else:
-            # default bundled config relative to repo root
-            p = Path(__file__).resolve().parents[3] / "configs" / "coordinator.default.json"
-        if p.exists():
-            data.update(json.loads(p.read_text(encoding="utf-8")))
+    def load(cls, path: Path | str | None = None, *, overrides: dict[str, Any] | None = None) -> CoordinatorConfig:
+        """
+        Load config from JSON file (if provided), then apply env and overrides.
 
-        # 2) environment
+        Env overrides:
+          - KAFKA_BOOTSTRAP_SERVERS
+          - WORKER_TYPES (comma-separated)
+        """
+        data: dict[str, Any] = {}
+
+        # File
+        file_path: Path | None = Path(path) if path else None
+        data.update(_try_load_json(file_path))
+
+        # Env
         if os.getenv("KAFKA_BOOTSTRAP_SERVERS"):
             data["kafka_bootstrap"] = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
-        if os.getenv("WORKER_TYPES"):
-            data["worker_types"] = [s.strip() for s in os.environ["WORKER_TYPES"].split(",") if s.strip()]
+        roles = _parse_csv_env("WORKER_TYPES")
+        if roles:
+            data["worker_types"] = roles
 
-        # 3) direct overrides (tests/CLI)
+        # Overrides
         if overrides:
             data.update(overrides)
 
-        # __post_init__ will derive ms
         return cls(**data)
+
+
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class WorkerConfig:
     """Worker configuration including adapter policy and timing."""
 
-    # Kafka
+    # Bus / Kafka
     kafka_bootstrap: str = "kafka:9092"
 
-    # Topic names/formats
+    # Topics
     topic_cmd_fmt: str = "cmd.{type}.v1"
     topic_status_fmt: str = "status.{type}.v1"
     topic_worker_announce: str = "workers.announce.v1"
@@ -121,10 +165,10 @@ class WorkerConfig:
 
     # Identity
     roles: list[str] = field(default_factory=lambda: ["echo"])
-    worker_id: str | None = None  # if None -> will be generated
+    worker_id: str | None = None
     worker_version: str = "2.0.0"
 
-    # Timing (seconds → ms derivations)
+    # Timing (seconds)
     lease_ttl_sec: int = 60
     hb_interval_sec: int = 20
     announce_interval_sec: int = 60
@@ -140,38 +184,43 @@ class WorkerConfig:
     # DB cancel poll
     db_cancel_poll_ms: int = 500
 
-    # ---- derived (computed in post_init) ----
-    # When True, certain adapters must receive explicit args (e.g. meta_list_key),
-    # otherwise the worker fails early with bad_input_args.
+    # Policies / derived
     strict_input_adapters: bool = False
     lease_ttl_ms: int = 60_000
     hb_interval_ms: int = 20_000
     announce_interval_ms: int = 60_000
 
+    # ---- Methods ------------------------------------------------------------
+
     def __post_init__(self) -> None:
+        if not self.kafka_bootstrap:
+            raise ValueError("kafka_bootstrap must be a non-empty string")
+        if not isinstance(self.roles, list) or not all(isinstance(x, str) and x for x in self.roles):
+            raise ValueError("roles must be a list of non-empty strings")
+        if self.dedup_cache_size < 0:
+            raise ValueError("dedup_cache_size must be non-negative")
         self.lease_ttl_ms = int(self.lease_ttl_sec * 1000)
         self.hb_interval_ms = int(self.hb_interval_sec * 1000)
         self.announce_interval_ms = int(self.announce_interval_sec * 1000)
 
-    # ---- topic helpers
+    # Topic helpers
     def topic_cmd(self, step_type: str) -> str:
         return self.topic_cmd_fmt.format(type=step_type)
 
     def topic_status(self, step_type: str) -> str:
         return self.topic_status_fmt.format(type=step_type)
 
-    # ---- loader
+    # Loader
     @staticmethod
-    def load(path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> WorkerConfig:
-        """Load config from JSON (file or default), then apply overrides."""
+    def load(path: Path | str | None = None, overrides: dict[str, Any] | None = None) -> WorkerConfig:
+        """
+        Load config from JSON file (if provided), then apply overrides.
+        Also honors env var KAFKA_BOOTSTRAP_SERVERS for convenience.
+        """
         data: dict[str, Any] = {}
-        if path:
-            p = Path(path)
-        else:
-            # default bundled config relative to repo root
-            p = Path(__file__).resolve().parents[3] / "configs" / "worker.default.json"
-        if p.exists():
-            data.update(json.loads(p.read_text(encoding="utf-8")))
+        data.update(_try_load_json(Path(path) if path else None))
+        if os.getenv("KAFKA_BOOTSTRAP_SERVERS"):
+            data["kafka_bootstrap"] = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
         if overrides:
             data.update(overrides)
         return WorkerConfig(**data)
