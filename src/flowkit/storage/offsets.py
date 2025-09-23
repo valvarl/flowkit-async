@@ -16,7 +16,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from ..api.streams import Checkpoint
+from flowkit.api.streams import Checkpoint
+
+from .base.errors import StorageError
 
 __all__ = [
     "CheckpointStore",
@@ -26,7 +28,7 @@ __all__ = [
 ]
 
 
-class OffsetError(RuntimeError):
+class OffsetError(StorageError):
     """Base error for checkpoint/offset operations."""
 
 
@@ -35,7 +37,7 @@ class CheckpointStore(Protocol):
     """
     Simple scope/key checkpoint store.
 
-    Examples:
+    Example:
         scope="secrets.scan", key="task:123|node:index|src:from_kafka|p:5"
     """
 

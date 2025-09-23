@@ -14,23 +14,25 @@ streams should be handled by adapters and stored as external objects, returning
 a reference (URI/object key). For convenience, small `bytes` writes are supported.
 """
 
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Mapping, MutableMapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from ..api.streams import Batch, FrameDescriptor
+from flowkit.api.streams import Batch, FrameDescriptor
 
+from .base.errors import StorageError
 
 __all__ = [
+    "BUCKET_DLQ",
+    "BUCKET_FINAL",
+    "BUCKET_PARTIAL",
     "ArtifactError",
     "ArtifactRef",
     "ArtifactStore",
-    "BUCKET_PARTIAL",
-    "BUCKET_FINAL",
-    "BUCKET_DLQ",
 ]
 
 
-class ArtifactError(RuntimeError):
+class ArtifactError(StorageError):
     """Base error for artifact operations."""
 
 
@@ -56,6 +58,7 @@ class ArtifactRef:
         created_ms: Epoch milliseconds when written.
         meta: Small metadata map (idempotency key, error info, tags).
     """
+
     task_id: str
     node_id: str
     bucket: str
@@ -97,7 +100,8 @@ class ArtifactStore(Protocol):
         idempotency_key: str | None = None,
         meta: Mapping[str, Any] | None = None,
     ) -> ArtifactRef:
-        """Write a small in-band payload as a new artifact and return its reference.""" ...
+        """Write a small in-band payload as a new artifact and return its reference."""
+        ...
 
     async def put_batch(
         self,
@@ -112,7 +116,8 @@ class ArtifactStore(Protocol):
         """
         Persist a framed batch (blob/ref + frame) or a batch of items serialized by the implementation.
         Implementations MAY choose to reject unframed item batches if unsupported.
-        """ ...
+        """
+        ...
 
     # ---- Read payloads ----
 
@@ -120,13 +125,15 @@ class ArtifactStore(Protocol):
         """
         Read full bytes for small artifacts. Implementations MAY raise when the
         artifact is backed by a remote reference and streaming is required.
-        """ ...
+        """
+        ...
 
     async def open_stream(self, ref: ArtifactRef, *, chunk_size: int = 1 << 20) -> AsyncIterator[bytes]:
         """
         Open a byte stream for large artifacts. Implementations MAY choose not to support
         streaming and raise NotImplementedError.
-        """ ...
+        """
+        ...
 
     # ---- Listing / deletion ----
 
@@ -143,7 +150,8 @@ class ArtifactStore(Protocol):
         """
         List artifact refs in a bucket with optional paging.
         Return (items, next_cursor).
-        """ ...
+        """
+        ...
 
     async def delete(self, ref: ArtifactRef) -> None: ...
 
@@ -162,4 +170,5 @@ class ArtifactStore(Protocol):
         """
         Move/copy an artifact between buckets (e.g., partial -> final) and return the new reference.
         Implementations MAY perform this as a cheap metadata move when possible.
-        """ ...
+        """
+        ...

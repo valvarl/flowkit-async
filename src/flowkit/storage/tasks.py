@@ -14,21 +14,23 @@ This intentionally does not model *all* coordinator data structures; it is the
 stable minimum that both coordinator and worker depend on.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping, MutableMapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from ..protocol.messages import RunState
+from flowkit.protocol.messages import RunState
 
+from .base.errors import StorageError
 
 __all__ = [
-    "TaskStoreError",
     "LeaseInfo",
     "TaskDoc",
     "TaskStore",
+    "TaskStoreError",
 ]
 
 
-class TaskStoreError(RuntimeError):
+class TaskStoreError(StorageError):
     """Base error for task store operations."""
 
 
@@ -42,6 +44,7 @@ class LeaseInfo:
         lease_id: Opaque token that must be presented to renew/release.
         deadline_ms: Epoch milliseconds when the lease expires.
     """
+
     worker_id: str
     lease_id: str
     deadline_ms: int
@@ -68,6 +71,7 @@ class TaskDoc:
         artifacts: Optional references to final artifacts summary.
         meta: Free-form metadata (owner, tags, etc).
     """
+
     task_id: str
     created_ms: int
     state: RunState = RunState.queued
@@ -109,7 +113,9 @@ class TaskStore(Protocol):
         """
         Apply a shallow patch to the document (atomic where supported).
         Return the updated document.
-        """ ...
+        """
+        ...
+
     async def delete(self, task_id: str) -> None: ...
 
     # ---- Vars (coordinator-managed) ----
@@ -124,7 +130,8 @@ class TaskStore(Protocol):
             {"op":"incr","key":"k","by":1}
 
         The store MAY validate types minimally; the coordinator should pre-validate.
-        """ ...
+        """
+        ...
 
     # ---- State / progress ----
 
@@ -150,4 +157,5 @@ class TaskStore(Protocol):
         """
         Optional: list tasks by simple filters with paging.
         Return (items, next_cursor).
-        """ ...
+        """
+        ...

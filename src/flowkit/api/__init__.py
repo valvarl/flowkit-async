@@ -14,8 +14,8 @@ from .adapters import (
     AdapterContext,
     AdapterKind,
     Capabilities,
-    OutputAdapter,
     Plugin,
+    SinkAdapter,
     SourceAdapter,
     TransformOp,
 )
@@ -49,7 +49,7 @@ from .externals import (
 from .hooks import HookAction, HookContext, HookEvent, HookSelector
 
 # Registry
-from .registry import PluginRegistry
+from .registry import PluginRegistry, StorageProvider
 
 # Streams / content model
 from .streams import (
@@ -61,6 +61,8 @@ from .streams import (
     Item,
     Nack,
 )
+
+PLUGIN_REGISTRY = PluginRegistry()
 
 __all__ = [
     # errors
@@ -85,7 +87,7 @@ __all__ = [
     "Capabilities",
     "AdapterContext",
     "SourceAdapter",
-    "OutputAdapter",
+    "SinkAdapter",
     "TransformOp",
     "Plugin",
     # externals
@@ -109,4 +111,6 @@ __all__ = [
     "eval_expr",
     # registry
     "PluginRegistry",
+    PLUGIN_REGISTRY,
+    "StorageProvider",
 ]

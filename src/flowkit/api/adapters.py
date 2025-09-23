@@ -13,16 +13,21 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+
+# NOTE: imported only for type hints to avoid cycles at runtime.
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .streams import Batch, Checkpoint, ContentKind, Item
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .handlers import BaseHandler
 
 
 class AdapterKind(str, Enum):
     """Declared adapter kind to aid diagnostics and registry tooling."""
 
     SOURCE = "source"
-    OUTPUT = "output"
+    SINK = "sink"
     TRANSFORM = "transform"
 
 
@@ -107,7 +112,7 @@ class TransformOp(Protocol):
 
 
 @runtime_checkable
-class OutputAdapter(Protocol):
+class SinkAdapter(Protocol):
     """
     Durable output (destination) with delivery semantics orchestrated by the runtime.
 
@@ -136,25 +141,20 @@ class Plugin(ABC):
 
     @abstractmethod
     def sources(self) -> Mapping[str, type[SourceAdapter]]: ...
+
     @abstractmethod
-    def outputs(self) -> Mapping[str, type[OutputAdapter]]: ...
+    def sinks(self) -> Mapping[str, type[SinkAdapter]]: ...
+
     @abstractmethod
     def transforms(self) -> Mapping[str, type[TransformOp]]: ...
 
     # Optional parts
+
     def externals(self) -> Mapping[str, Any]:
         return {}
 
     def hook_actions(self) -> Mapping[str, Any]:
         return {}
 
-
-__all__ = [
-    "AdapterContext",
-    "AdapterKind",
-    "Capabilities",
-    "OutputAdapter",
-    "Plugin",
-    "SourceAdapter",
-    "TransformOp",
-]
+    def handlers(self) -> Mapping[str, type[BaseHandler]]:
+        return {}

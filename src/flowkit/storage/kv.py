@@ -13,19 +13,21 @@ Implementations may use Redis, Mongo, Postgres, etc. The interface purposefully
 does not prescribe persistence details.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, MutableMapping, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from .base.errors import StorageError
 
 __all__ = [
     "KVError",
+    "KVStore",
     "LockError",
     "LockInfo",
-    "KVStore",
 ]
 
 
-class KVError(RuntimeError):
+class KVError(StorageError):
     """Base error for KV operations."""
 
 
@@ -45,6 +47,7 @@ class LockInfo:
         deadline_ms: Epoch milliseconds when the lock expires (best-effort).
         meta: Optional metadata provided by the owner.
     """
+
     name: str
     owner: str
     token: str
@@ -74,13 +77,15 @@ class KVStore(Protocol):
     async def ttl(self, key: str) -> int | None:
         """
         Return remaining TTL in milliseconds, None if key has no TTL, or -1 if not found.
-        """ ...
+        """
+        ...
 
     async def cas(self, key: str, expect: Any, update: Any, *, ttl_ms: int | None = None) -> bool:
         """
         Compare-and-set: if current value equals `expect`, set to `update` and return True;
         otherwise return False without modifying the key.
-        """ ...
+        """
+        ...
 
     # -------- Locks --------
 
@@ -95,17 +100,21 @@ class KVStore(Protocol):
         """
         Try to acquire a lock. Return LockInfo on success, or None if held by someone else.
         MUST be safe to call repeatedly (idempotent for the same owner if implementation chooses so).
-        """ ...
+        """
+        ...
 
     async def renew_lock(self, name: str, *, owner: str, token: str, ttl_ms: int) -> bool:
         """
         Extend the lock TTL if the caller owns it (by matching token). Return True if renewed.
-        """ ...
+        """
+        ...
 
     async def release_lock(self, name: str, *, owner: str, token: str) -> bool:
         """
         Release the lock if owned. Return True if the lock was released.
-        """ ...
+        """
+        ...
 
     async def get_lock(self, name: str) -> LockInfo | None:
-        """Return current lock info, if any (best-effort).""" ...
+        """Return current lock info, if any (best-effort)."""
+        ...

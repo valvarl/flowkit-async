@@ -5,6 +5,12 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from .base.errors import StorageError
+
+
+class OutboxError(StorageError):
+    """Base error for outbox operations."""
+
 
 @dataclass(frozen=True)
 class OutboxRecord:
@@ -22,8 +28,7 @@ class OutboxStore(Protocol):
     """
     Minimal persistence contract for the coordinator's outbox.
 
-    Implementations may use Mongo, Postgres, Redis, etc. The store is
-    responsible for durable state transitions and selection ordering.
+    Implementations are responsible for durable state transitions and selection ordering.
     """
 
     async def enqueue(self, *, topic: str, key: str | None, envelope: Mapping[str, Any], fp: str | None) -> None:
