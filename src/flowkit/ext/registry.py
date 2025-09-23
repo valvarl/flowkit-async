@@ -18,11 +18,10 @@ Entry points:
 
 from typing import Any, NamedTuple, Protocol
 
+from flowkit.api.adapters import Plugin, SinkAdapter, SourceAdapter, TransformOp
+from flowkit.api.errors import FlowkitError
+from flowkit.api.handlers import BaseHandler
 from flowkit.storage.base.capabilities import StorageCapabilities
-
-from .adapters import Plugin, SinkAdapter, SourceAdapter, TransformOp
-from .errors import FlowkitError
-from .handlers import BaseHandler
 
 # ───────────────────────────────────────── Types ─────────────────────────────────────────
 

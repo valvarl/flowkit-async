@@ -1,39 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-r"""
-Minimal, safe, deterministic boolean expression engine.
-
-Supported grammar (EBNF-ish):
-  expr       := or_expr
-  or_expr    := and_expr { "||" and_expr }*
-  and_expr   := not_expr { "&&" not_expr }*
-  not_expr   := [ "!" ] primary
-  primary    := literal | "(" expr ")" | comparison | function_call | path
-  comparison := value ( "==" | "!=" | ">" | "<" | ">=" | "<=" ) value
-  value      := identifier | literal
-  literal    := "true" | "false" | number | string | null
-  identifier := [a-zA-Z_][a-zA-Z0-9_\.]*
-  function_call := name "(" [arglist] ")"
-  arglist    := expr { "," expr }*
-
-Name resolution:
-  - paths are resolved against `env` dict; missing paths return None
-  - helpers: collect_parent_signals(), collect_external_names() for compile-time checks
-
-This module is intentionally minimal; templates like {{...}} are resolved outside.
-"""
-
 import re
-from dataclasses import dataclass
 from typing import Any
 
-from .expr_funcs import FunctionRegistry, get_default_functions
+from .ast import Expr, ExprError
 
-__all__ = ["Expr", "ExprError", "parse_expr"]
+__all__ = ["parse_expr"]
 
-
-# ---- tokenizer
+# ---- tokenizer ---------------------------------------------------------------
 
 _TOKEN_SPEC = [
     ("WS", r"[ \t\r\n]+"),
@@ -57,10 +32,6 @@ _TOKEN_SPEC = [
 _TOKEN_RE = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in _TOKEN_SPEC))
 
 
-class ExprError(ValueError):
-    """User-facing expression error (no internals leaked)."""
-
-
 class _Tok:
     def __init__(self, kind: str, value: Any = None):
         self.kind = kind
@@ -70,7 +41,7 @@ class _Tok:
         return f"{self.kind}:{self.value!r}"
 
 
-def _lex(s: str) -> list["._Tok"]:
+def _lex(s: str) -> list[_Tok]:
     out: list[_Tok] = []
     pos = 0
     while pos < len(s):
@@ -93,91 +64,7 @@ def _lex(s: str) -> list["._Tok"]:
     return out
 
 
-# ---- AST
-
-
-@dataclass(frozen=True)
-class Expr:
-    """Immutable AST node with small helper methods."""
-
-    kind: str
-    value: Any = None
-    children: tuple[Expr, ...] = ()
-
-    # --- analysis helpers
-
-    def collect_parent_signals(self) -> dict[str, set]:
-        """Collect references like <parent>.done / <parent>.batch."""
-        acc: dict[str, set] = {}
-        self._walk_collect_parent_signals(self, acc)
-        return acc
-
-    def _walk_collect_parent_signals(self, node: Expr, acc: dict[str, set]) -> None:
-        if node.kind == "PATH" and isinstance(node.value, tuple) and len(node.value) >= 2:
-            a, b = node.value[0], node.value[1]
-            if isinstance(a, str) and isinstance(b, str) and b in {"done", "batch", "failed", "exists"}:
-                acc.setdefault(a, set()).add(b)
-        for ch in node.children:
-            self._walk_collect_parent_signals(ch, acc)
-
-    def collect_external_names(self) -> set:
-        """Collect references like external.<name>.*"""
-        acc: set = set()
-        self._walk_collect_externals(self, acc)
-        return acc
-
-    def _walk_collect_externals(self, node: Expr, acc: set) -> None:
-        if node.kind == "PATH" and isinstance(node.value, tuple) and len(node.value) >= 2:
-            parts = node.value
-            if parts[0] == "external" and isinstance(parts[1], str):
-                acc.add(parts[1])
-        for ch in node.children:
-            self._walk_collect_externals(ch, acc)
-
-    # --- evaluation
-
-    def eval(self, env: dict[str, Any], *, fns: FunctionRegistry | None = None) -> Any:
-        """Evaluate the AST against an environment mapping."""
-        if fns is None:
-            fns = get_default_functions()
-
-        k = self.kind
-        if k == "LIT":
-            return self.value
-        if k == "PATH":
-            cur: Any = env
-            for seg in self.value:
-                if isinstance(cur, dict) and seg in cur:
-                    cur = cur[seg]
-                else:
-                    return None
-            return cur
-        if k in {"==", "!=", ">", "<", ">=", "<="}:
-            a = self.children[0].eval(env, fns=fns)
-            b = self.children[1].eval(env, fns=fns)
-            return {
-                "==": lambda x, y: x == y,
-                "!=": lambda x, y: x != y,
-                ">": lambda x, y: (x is not None and y is not None and x > y),
-                "<": lambda x, y: (x is not None and y is not None and x < y),
-                ">=": lambda x, y: (x is not None and y is not None and x >= y),
-                "<=": lambda x, y: (x is not None and y is not None and x <= y),
-            }[k](a, b)
-        if k == "&&":
-            return bool(self.children[0].eval(env, fns=fns)) and bool(self.children[1].eval(env, fns=fns))
-        if k == "||":
-            return bool(self.children[0].eval(env, fns=fns)) or bool(self.children[1].eval(env, fns=fns))
-        if k == "!":
-            return not bool(self.children[0].eval(env, fns=fns))
-        if k == "CALL":
-            fn_name = self.value
-            fn = fns.get(fn_name)
-            args = [c.eval(env, fns=fns) for c in self.children]
-            return fn(*args)
-        raise ExprError(f"unsupported node kind: {k}")
-
-
-# ---- recursive descent parser
+# ---- recursive descent parser -----------------------------------------------
 
 
 class _Parser:

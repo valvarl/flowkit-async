@@ -40,7 +40,7 @@ class FunctionRegistry:
         return sorted(self._fn.keys())
 
 
-# ---- Built-ins
+# ---- Built-ins ---------------------------------------------------------------
 
 
 def _fn_in(value: Any, *options: Any) -> bool:

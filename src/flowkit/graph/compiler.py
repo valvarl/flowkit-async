@@ -19,7 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .expr import Expr, ExprError, parse_expr
+from flowkit.expr import Expr, ExprError, parse_expr
+
 from .spec import GraphSpecV22, NodeSpecV2
 
 # -------------------------------

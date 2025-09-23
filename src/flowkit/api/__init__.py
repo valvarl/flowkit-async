@@ -8,7 +8,6 @@ This module re-exports stable contracts for building custom adapters, transforms
 outputs (destinations), externals, hook actions, and expression-based integrations.
 """
 
-# Errors
 # Adapter & transform contracts
 from .adapters import (
     AdapterContext,
@@ -19,6 +18,8 @@ from .adapters import (
     SourceAdapter,
     TransformOp,
 )
+
+# Errors
 from .errors import (
     Backpressure,
     CancelledError,
@@ -48,9 +49,6 @@ from .externals import (
 # Hooks
 from .hooks import HookAction, HookContext, HookEvent, HookSelector
 
-# Registry
-from .registry import PluginRegistry, StorageProvider
-
 # Streams / content model
 from .streams import (
     Ack,
@@ -61,8 +59,6 @@ from .streams import (
     Item,
     Nack,
 )
-
-PLUGIN_REGISTRY = PluginRegistry()
 
 __all__ = [
     # errors
@@ -109,8 +105,4 @@ __all__ = [
     "ExprError",
     "compile_expr",
     "eval_expr",
-    # registry
-    "PluginRegistry",
-    PLUGIN_REGISTRY,
-    "StorageProvider",
 ]

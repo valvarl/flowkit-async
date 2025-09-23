@@ -11,9 +11,8 @@ code can validate expressions in isolation (e.g., custom hook conditions).
 from collections.abc import Mapping
 from typing import Any
 
-# Import from internal engine (graph.expr) but keep public API stable here.
-from ..graph.expr import Expr, ExprError  # type: ignore[attr-defined]
-from ..graph.expr import parse_expr as _parse
+from flowkit.expr.ast import Expr, ExprError
+from flowkit.expr.compiler import parse_expr as _parse
 
 __all__ = ["Expr", "ExprError", "compile_expr", "eval_expr"]
 
