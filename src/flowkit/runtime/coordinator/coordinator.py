@@ -2,39 +2,22 @@
 from __future__ import annotations
 
 """
-FlowKit Coordinator (v2) — storage- and transport-agnostic.
+FlowKit Coordinator (MVP v2)
 
-Responsibilities:
-  - Create tasks from declarative GraphSpec (compile → ExecutionPlan + runtime slice).
-  - Evaluate start policies and schedule runnable nodes (Planner + VarsStore).
-  - Enforce basic concurrency/fairness (in-memory Scheduler; leases done by TaskStore).
-  - Drive reliable command dispatch via OutboxDispatcher (at-least-once).
-  - React to worker events (accepted/heartbeat/batch_ok/batch_failed/done/failed/cancelled).
-  - Trigger children (static parents and dynamic edges_ex).
-  - Execute coordinator-side hooks (low cardinality).
-
-Out of scope:
-  - DB schemas and Kafka consumer wiring (done by the app using this class).
-  - Worker protocol details beyond the Envelope payload types.
-
-Design notes:
-  - This file uses narrow protocols from `flowkit.storage.*` so any DB can be plugged in.
-  - Transport is abstracted via `flowkit.transport.bus.Bus` for sending;
-    consumption is delegated to the application which must call `on_event()` with Envelopes.
+- Plans → schedules → dispatches start commands
+- Reacts to worker events (accepted/heartbeat/batch/done/failed/cancelled)
+- Triggers children on on_batch/on_done
+- Uses common OutboxDispatcher and Observatory
 """
 
 import asyncio
-import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from ...core.utils import stable_hash
-from ...graph.compiler import (
-    ExecutionPlan,
-    prepare_for_task_create_v21,
-)
+from ...graph.compiler import ExecutionPlan, prepare_for_task_create_v21
 from ...io.validation import normalize_adapter_args, validate_input_adapter
 from ...protocol.messages import (
     CmdTaskStart,
@@ -51,50 +34,30 @@ from ...protocol.messages import (
     Role,
     RunState,
 )
-from ...runtime.coordinator.hooks_runner import HooksRunner
-from ...runtime.coordinator.metrics import CoordinatorMetrics
-from ...runtime.coordinator.outbox import OutboxDispatcher
-from ...runtime.coordinator.planner import (
-    EvalContext,
-    ExternalSnapshot,
-    ParentSnapshot,
-    Planner,
-)
-from ...runtime.coordinator.scheduler import QueueItem, Scheduler
-from ...runtime.coordinator.vars_store import VarsStore
 from ...storage.artifacts import ArtifactStore
 from ...storage.kv import KVStore
-
-# Storage interfaces (DB-agnostic)
 from ...storage.tasks import NodeSnapshot, TaskDoc, TaskStore
 from ...transport.bus import Bus
+from ..common.observability import Observatory
+from ..common.outbox import OutboxDispatcher
+from .hooks_runner import HooksRunner
+from .metrics import CoordinatorMetrics
+from .planner import EvalContext, ExternalSnapshot, ParentSnapshot, Planner
+from .scheduler import QueueItem, Scheduler
+from .vars_store import VarsStore
 
-# Optional plugin registry for hooks (your app may bring its own registry)
-try:
-    from ...api.registry import PluginRegistry
-except Exception:  # pragma: no cover
-    PluginRegistry = object  # type: ignore[misc, assignment]
-
-
-# ---- Coordinator options -----------------------------------------------------
+# ---- Options ----------------------------------------------------------------
 
 
 @dataclass
 class CoordinatorOpts:
-    """
-    Coordinator runtime options.
-
-    Notes:
-      - All timings are in milliseconds unless otherwise stated.
-      - The Scheduler is timer-driven (pull model) to keep Bus completely optional.
-    """
-
     scheduler_tick_ms: int = 200
     hb_soft_timeout_ms: int = 60_000
     hb_hard_timeout_ms: int = 5 * 60_000
     finalizer_tick_ms: int = 1_000
-    # When discovering/resuming inflight work, skip re-dispatch for a short window.
     discovery_window_ms: int = 2_000
+    dispatch_tick_ms: int = 50
+    dispatch_batch: int = 64
 
 
 # ---- Coordinator -------------------------------------------------------------
@@ -102,18 +65,10 @@ class CoordinatorOpts:
 
 class Coordinator:
     """
-    Storage- and transport-agnostic coordinator.
-
-    The application is expected to:
-      1) Construct Coordinator with TaskStore/ArtifactStore/VarsStore/OutboxDispatcher/Bus.
-      2) Call `start()` → coordinator starts internal scheduling/finalizer loops.
-      3) Wire transport consumers and call `on_event(env)` for each worker event.
-
-    Minimal lifecycle:
-        coord = Coordinator(...)
-        await coord.start()
-        ...
-        await coord.stop()
+    The application should:
+      1) Construct Coordinator with TaskStore/ArtifactStore/KV/Outbox/Bus/Observatory.
+      2) await start()
+      3) Wire transport consumers and call on_event(env) for worker events.
     """
 
     def __init__(
@@ -124,12 +79,11 @@ class Coordinator:
         kv: KVStore,
         outbox: OutboxDispatcher,
         bus: Bus,
+        observatory: Observatory | None = None,
         vars_store: VarsStore | None = None,
         hooks: HooksRunner | None = None,
         metrics: CoordinatorMetrics | None = None,
         opts: CoordinatorOpts | None = None,
-        registry: PluginRegistry | None = None,
-        logger: logging.Logger | None = None,
     ) -> None:
         self.tasks = tasks
         self.artifacts = artifacts
@@ -137,32 +91,31 @@ class Coordinator:
         self.outbox = outbox
         self.bus = bus
 
+        self.obs = observatory or Observatory.create(service_name="coordinator")
         self.vars = vars_store or VarsStore(backend=self._mk_vars_backend(kv))
-        self.hooks = hooks or HooksRunner(registry=registry)  # registry may be None if not used
-        self.metrics = metrics or CoordinatorMetrics.create()
+        self.hooks = hooks or HooksRunner(registry=None, observatory=self.obs)
+        self.metrics = metrics or CoordinatorMetrics.create(self.obs.meter)
         self.opts = opts or CoordinatorOpts()
-        self.log = logger or logging.getLogger("flowkit.coordinator")
 
-        # Runtime state
         self._running = False
         self._bg: set[asyncio.Task] = set()
-
-        # In-memory scheduler (enforces fairness and per-key limits at dispatch time)
         self._sched = Scheduler()
+
+        # pending envs prepared during schedule; (task_id, node_id) -> Envelope
+        self._pending: dict[tuple[str, str], Envelope] = {}
 
     # ---- lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:
-        """Start scheduling/finalizer/heartbeat background loops."""
         if self._running:
             return
         self._running = True
         self._spawn(self._scheduler_loop(), name="scheduler")
+        self._spawn(self._dispatch_loop(), name="dispatch")
         self._spawn(self._heartbeat_monitor(), name="hb-monitor")
         self._spawn(self._finalizer_loop(), name="finalizer")
 
     async def stop(self) -> None:
-        """Stop background loops. OutboxDispatcher should be stopped by the app."""
         if not self._running:
             return
         self._running = False
@@ -170,16 +123,11 @@ class Coordinator:
             t.cancel()
         self._bg.clear()
 
-    # ---- public API ----------------------------------------------------------
+    # ---- API -----------------------------------------------------------------
 
     async def create_task(self, *, graph_input: Mapping[str, Any], params: Mapping[str, Any] | None = None) -> str:
-        """
-        Create a new task: validate+compile the graph and persist TaskDoc via TaskStore.
-        Returns the new task_id.
-        """
         spec, plan, runtime = prepare_for_task_create_v21(dict(graph_input))
         task_id = str(uuid.uuid4())
-
         tdoc = TaskDoc(
             task_id=task_id,
             schema_version=spec.schema_version,
@@ -189,15 +137,11 @@ class Coordinator:
             status=RunState.queued.value,
         )
         await self.tasks.create(tdoc)
-        self.log.debug("task.created", extra={"task_id": task_id})
+        with self.obs.scoped(task_id=task_id).log_context(event="task.created"):
+            self.obs.logger.info("task.created")
         return task_id
 
     async def cancel_task(self, task_id: str, *, reason: str = "user_request") -> bool:
-        """
-        Request a best-effort cancellation for the task.
-        - Flags the task as 'cancelling' and marks queued nodes accordingly.
-        - Sends cancel signals for running nodes with leases (via OutboxDispatcher).
-        """
         doc = await self.tasks.get(task_id)
         if not doc:
             return False
@@ -205,51 +149,69 @@ class Coordinator:
         await self._cascade_cancel(doc, reason=reason)
         return True
 
-    # ---- event ingestion (call from your transport consumer) -----------------
+    # ---- event ingestion -----------------------------------------------------
 
     async def on_event(self, env: Envelope) -> None:
-        """
-        Handle a single Envelope from a worker.
-
-        Expected envelope kinds (EventKind):
-            TASK_ACCEPTED, TASK_HEARTBEAT, TASK_RESUMED, BATCH_OK, BATCH_FAILED, TASK_DONE, TASK_FAILED, CANCELLED
-        Other envelope kinds are ignored.
-        """
         if env.msg_type != MsgType.event or env.role != Role.worker:
             return
-
-        # Touch "last event seen" (best-effort)
         await self.tasks.touch_event(task_id=env.task_id)
 
         kind = _as_event_kind(env.payload.get("kind"))
         if not kind:
             return
 
-        handlers = {
-            EventKind.TASK_ACCEPTED: self._on_task_accepted,
-            EventKind.TASK_HEARTBEAT: self._on_task_heartbeat,
-            EventKind.TASK_RESUMED: self._on_task_heartbeat,
-            EventKind.BATCH_OK: self._on_batch_ok,
-            EventKind.BATCH_FAILED: self._on_batch_failed,
-            EventKind.TASK_DONE: self._on_task_done,
-            EventKind.TASK_FAILED: self._on_task_failed,
-            EventKind.CANCELLED: self._on_cancelled,
-        }
-        h = handlers.get(kind)
-        if h:
-            await h(env)
+        if kind is EventKind.TASK_ACCEPTED:
+            await self._on_task_accepted(env)
+        elif kind in (EventKind.TASK_HEARTBEAT, EventKind.TASK_RESUMED):
+            await self._on_task_heartbeat(env)
+        elif kind is EventKind.BATCH_OK:
+            await self._on_batch_ok(env)
+        elif kind is EventKind.BATCH_FAILED:
+            await self._on_batch_failed(env)
+        elif kind is EventKind.TASK_DONE:
+            await self._on_task_done(env)
+        elif kind is EventKind.TASK_FAILED:
+            await self._on_task_failed(env)
+        elif kind is EventKind.CANCELLED:
+            await self._on_cancelled(env)
 
-    # ---- internal: scheduler -------------------------------------------------
+    # ---- scheduler & dispatch loops -----------------------------------------
 
     async def _scheduler_loop(self) -> None:
         try:
             while self._running:
                 await self._schedule_tick()
                 await asyncio.sleep(self.opts.scheduler_tick_ms / 1000.0)
-        except asyncio.CancelledError:  # graceful stop
+        except asyncio.CancelledError:
             return
-        except Exception:  # pragma: no cover
-            self.log.exception("scheduler.loop.crashed")
+        except Exception:
+            with self.obs.scoped().log_context(event="scheduler.loop.crashed"):
+                self.obs.logger.exception("scheduler.loop.crashed")
+
+    async def _dispatch_loop(self) -> None:
+        tick_ms = self.opts.dispatch_tick_ms
+        batch = self.opts.dispatch_batch
+        try:
+            while self._running:
+                picked = self._sched.pop_ready(max_n=batch)
+                if not picked:
+                    await asyncio.sleep(tick_ms / 1000.0)
+                    continue
+                for it in picked:
+                    key = (it.task_id, it.node_id)
+                    env = self._pending.pop(key, None)
+                    if not env:
+                        # Nothing to send — stale queue item
+                        self._sched.release(it.concurrency_key)
+                        continue
+                    topic_key = f"{it.task_id}:{it.node_id}"
+                    await self.outbox.enqueue(topic=self._topic_cmd(it.step_type), key=topic_key, env=env)
+                    self.metrics.dispatched_total.labels(step_type=it.step_type).inc()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            with self.obs.scoped().log_context(event="dispatch.loop.crashed"):
+                self.obs.logger.exception("dispatch.loop.crashed")
 
     async def _schedule_tick(self) -> None:
         """
@@ -280,13 +242,13 @@ class Coordinator:
                     continue
 
                 # Planner-based start policy: parents/externals/vars/params
-                ctx = await self._build_eval_ctx(doc, node, planner)
+                ctx = await self._build_eval_ctx(doc, node, planner, vars_map)
                 decision = planner.evaluate_start(node.node_id, ctx)
                 if not decision.ready:
                     continue
 
                 # Try to CAS → running (TaskStore controls epochs/leases)
-                begin_ok, new_epoch, lease = await self.tasks.begin_node(
+                begin_ok, new_epoch, _lease = await self.tasks.begin_node(
                     task_id=doc.task_id,
                     node_id=node.node_id,
                 )
@@ -295,14 +257,14 @@ class Coordinator:
 
                 # Build IO plan (source/pull) and enqueue cmd
                 io_plan = await self._build_io_plan(doc, node)
-                await self._dispatch_start(
+                await self._prepare_start(
                     task=doc,
                     node=node,
                     epoch=new_epoch,
                     io_plan=io_plan,
                 )
 
-    # ---- internal: event handlers -------------------------------------------
+    # ---- event handlers ------------------------------------------------------
 
     async def _on_task_accepted(self, env: Envelope) -> None:
         p = EvTaskAccepted.model_validate(env.payload)
@@ -341,10 +303,7 @@ class Coordinator:
     async def _on_batch_failed(self, env: Envelope) -> None:
         p = EvBatchFailed.model_validate(env.payload)
         await self.artifacts.mark_failed(
-            task_id=env.task_id,
-            node_id=env.node_id,
-            batch_uid=p.batch_uid,
-            reason=p.reason_code,
+            task_id=env.task_id, node_id=env.node_id, batch_uid=p.batch_uid, reason=p.reason_code
         )
 
     async def _on_task_done(self, env: Envelope) -> None:
@@ -352,12 +311,10 @@ class Coordinator:
         # Final artifact (may be absent — e.g., control nodes)
         if p.artifacts_ref is not None:
             await self.artifacts.upsert_final(
-                task_id=env.task_id,
-                node_id=env.node_id,
-                meta=p.metrics or {},
-                ref=p.artifacts_ref,
+                task_id=env.task_id, node_id=env.node_id, meta=p.metrics or {}, ref=p.artifacts_ref
             )
         await self.tasks.finish_node(task_id=env.task_id, node_id=env.node_id)
+        await self._release_concurrency(env)
         # Fan-out: children with on_done edges (static + dynamic)
         await self._trigger_children_on_event(env, trigger="on_done")
 
@@ -373,12 +330,14 @@ class Coordinator:
         else:
             # Soft failure → defer with backoff (TaskStore decides the next_retry_at_ms)
             await self.tasks.defer_node(task_id=env.task_id, node_id=env.node_id, reason=p.reason_code)
+        await self._release_concurrency(env)
 
     async def _on_cancelled(self, env: Envelope) -> None:
         # Worker reported cancellation completed (coordinator initiated earlier)
         await self.tasks.defer_node(task_id=env.task_id, node_id=env.node_id, reason="cancelled")
+        await self._release_concurrency(env)
 
-    # ---- internal: helpers ---------------------------------------------------
+    # ---- helpers -------------------------------------------------------------
 
     def _spawn(self, coro, *, name: str | None = None) -> None:
         t = asyncio.create_task(coro, name=name or getattr(coro, "__name__", "task"))
@@ -389,11 +348,13 @@ class Coordinator:
             if task.cancelled():
                 return
             if exc := task.exception():
-                self.log.exception("coordinator.task.crashed", exc_info=exc)
+                self.obs.logger.exception("coordinator.task.crashed", exc_info=exc)
 
         t.add_done_callback(_done)
 
-    async def _build_eval_ctx(self, doc: TaskDoc, node: NodeSnapshot, planner: Planner) -> EvalContext:
+    async def _build_eval_ctx(
+        self, doc: TaskDoc, node: NodeSnapshot, planner: Planner, vars_map: Mapping[str, Any]
+    ) -> EvalContext:
         """Build expression environment for start/gate/edges evaluation."""
         # Parent snapshots
         parents = {}
@@ -409,7 +370,7 @@ class Coordinator:
         externals = {name: ExternalSnapshot(ready=False) for name in (planner.plan.graph_externals or {}).keys()}
         return EvalContext(
             params=dict(doc.params or {}),
-            vars=await self.vars.get_all(doc.task_id),
+            vars=dict(vars_map or {}),
             parents=parents,
             externals=externals,
         )
@@ -464,20 +425,11 @@ class Coordinator:
             raise ValueError(f"node {node.node_id}: {why}")
         return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": parents}}
 
-    async def _dispatch_start(
-        self,
-        *,
-        task: TaskDoc,
-        node: NodeSnapshot,
-        epoch: int,
-        io_plan: dict[str, Any] | None,
+    async def _prepare_start(
+        self, *, task: TaskDoc, node: NodeSnapshot, epoch: int, io_plan: dict[str, Any] | None
     ) -> None:
-        """Enqueue CmdTaskStart for the given node."""
-        cmd = CmdTaskStart(
-            cmd=CommandKind.TASK_START,
-            input_inline=io_plan,
-            cancel_token=str(uuid.uuid4()),
-        )
+        """Prepare CmdTaskStart and queue into the in-memory scheduler."""
+        cmd = CmdTaskStart(cmd=CommandKind.TASK_START, input_inline=io_plan, cancel_token=str(uuid.uuid4()))
         env = Envelope(
             msg_type=MsgType.cmd,
             role=Role.coordinator,
@@ -490,7 +442,6 @@ class Coordinator:
             attempt_epoch=epoch,
             payload=cmd.model_dump(),
         )
-        # Per-key fairness using Scheduler: priority/concurrency hints come from node policies in ExecutionPlan
         cq = node.concurrency or {}
         item = QueueItem(
             task_id=task.task_id,
@@ -500,13 +451,8 @@ class Coordinator:
             concurrency_key=cq.get("concurrency_key"),
             concurrency_limit=cq.get("limit"),
         )
+        self._pending[(task.task_id, node.node_id)] = env
         self._sched.offer(item)
-        picked = self._sched.pop_ready(max_n=8)  # small batch to amortize CPU
-        for it in picked:
-            topic_key = f"{it.task_id}:{it.node_id}"
-            await self.outbox.enqueue(topic=self._topic_cmd(it.step_type), key=topic_key, env=env)
-
-        # Metrics
         self.metrics.scheduled_total.labels(step_type=node.type).inc()
 
     async def _trigger_children_on_event(self, env: Envelope, *, trigger: str) -> None:
@@ -525,7 +471,12 @@ class Coordinator:
         # Evaluate dynamic edges for this trigger
         # (coordinator evaluates, then children will pass their own readiness gates)
         if plan.dynamic_edges:
-            ctx = await self._build_eval_ctx(doc, await self.tasks.get_node(env.task_id, env.node_id), planner)
+            ctx = await self._build_eval_ctx(
+                doc,
+                await self.tasks.get_node(env.task_id, env.node_id),
+                planner,
+                await self.vars.get_all(env.task_id),
+            )
             for e in planner.iter_enabled_edges(ctx):
                 if e.get("from") == env.node_id and e.get("on") == f"on_{trigger.split('_')[-1]}":
                     ch = e.get("to")
@@ -536,7 +487,7 @@ class Coordinator:
                         begin_ok, new_epoch, _lease = await self.tasks.begin_node(task_id=env.task_id, node_id=ch)
                         if begin_ok:
                             io_plan = await self._build_io_plan(doc, ch_node)
-                            await self._dispatch_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
+                            await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
 
         # Static children (parents_by_child)
         for child_id in plan.children_by_parent.get(env.node_id, []) or []:
@@ -544,7 +495,7 @@ class Coordinator:
             if not ch_node:
                 continue
             if await self._node_ready(doc, ch_node):
-                ctx = await self._build_eval_ctx(doc, ch_node, planner)
+                ctx = await self._build_eval_ctx(doc, ch_node, planner, await self.vars.get_all(env.task_id))
                 dec = planner.evaluate_start(child_id, ctx)
                 if not dec.ready:
                     continue
@@ -552,7 +503,7 @@ class Coordinator:
                 if not begin_ok:
                     continue
                 io_plan = await self._build_io_plan(doc, ch_node)
-                await self._dispatch_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
+                await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
 
     async def _cascade_cancel(self, doc: TaskDoc, *, reason: str) -> None:
         """
@@ -587,6 +538,14 @@ class Coordinator:
                 )
                 await self.outbox.enqueue(topic=self._topic_signals(), key=n.lease.worker_id, env=env)
 
+    async def _release_concurrency(self, env: Envelope) -> None:
+        # Release concurrency slot for the node's key (if any)
+        node = await self.tasks.get_node(env.task_id, env.node_id)
+        if not node:
+            return
+        cq = node.concurrency or {}
+        self._sched.release(cq.get("concurrency_key"))
+
     # ---- monitors ------------------------------------------------------------
 
     async def _heartbeat_monitor(self) -> None:
@@ -594,19 +553,15 @@ class Coordinator:
             while self._running:
                 async for t in self.tasks.iter_active():
                     dt_ms = await self.tasks.ms_since_last_event(t.task_id)
-                    if (
-                        dt_ms >= self.opts.hard_timeout_ms
-                        if hasattr(self.opts, "hard_timeout_ms")
-                        else self.opts.hb_hard_timeout_ms
-                    ):
+                    if dt_ms >= self.opts.hb_hard_timeout_ms:
                         await self.tasks.fail_task(task_id=t.task_id, reason="liveness:hard_timeout")
                     elif dt_ms >= self.opts.hb_soft_timeout_ms:
                         await self.tasks.defer_task(task_id=t.task_id, reason="liveness:soft_timeout")
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             return
-        except Exception:  # pragma: no cover
-            self.log.exception("heartbeat.monitor.crashed")
+        except Exception:
+            self.obs.logger.exception("heartbeat.monitor.crashed")
 
     async def _finalizer_loop(self) -> None:
         try:
@@ -617,10 +572,18 @@ class Coordinator:
                 await asyncio.sleep(self.opts.finalizer_tick_ms / 1000.0)
         except asyncio.CancelledError:
             return
-        except Exception:  # pragma: no cover
-            self.log.exception("finalizer.loop.crashed")
+        except Exception:
+            self.obs.logger.exception("finalizer.loop.crashed")
 
-    # ---- adapters / misc -----------------------------------------------------
+    # ---- Topic helpers -------------------------------------------------------
+
+    def _topic_cmd(self, step_type: str) -> str:
+        return f"flowkit.cmd.{step_type}"
+
+    def _topic_signals(self) -> str:
+        return "flowkit.signals"
+
+    # ---- Vars backend adapter ------------------------------------------------
 
     def _mk_vars_backend(self, kv: KVStore):
         """
@@ -645,17 +608,8 @@ class Coordinator:
 
         return _Backend(kv)
 
-    # Topic helpers — the app can override these by subclassing if needed
-    def _topic_cmd(self, step_type: str) -> str:
-        return f"flowkit.cmd.{step_type}"
 
-    def _topic_signals(self) -> str:
-        return "flowkit.signals"
-
-    # (status/reply/announce topics are not used here; ingestion is external)
-
-
-# ---- small helpers -----------------------------------------------------------
+# ---- helpers ----------------------------------------------------------------
 
 
 def _runstate(v: Any) -> RunState | None:

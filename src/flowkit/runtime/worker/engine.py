@@ -6,8 +6,9 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any, Union
 
 from ...api.adapters import AdapterContext, SourceAdapter
-from ...api.registry import PluginRegistry
 from ...api.streams import Batch, Checkpoint, Item
+from ...ext.registry import PluginRegistry
+from ..common.observability import ScopedObs
 from .checkpoints import CheckpointsStore
 from .hooks_runner import WorkerHooksRunner
 from .metrics import WorkerMetrics
@@ -27,14 +28,7 @@ class StreamEngine:
       - checkpointing: commit AFTER durable send
       - cancellation & graceful drain
       - worker-side hooks
-
-    Assumptions about adapters:
-      - SourceAdapter provides an async iterator of (element, optional checkpoint, optional idempotency_key).
-        Shapes supported per item:
-            element
-            (element, checkpoint)
-            (element, checkpoint, idem_key)
-      - SinkAdapter implements `send(element, idempotency_key=None)` and optional `flush()/close()`.
+      - minimal observability (logs/metrics)
     """
 
     def __init__(
@@ -45,11 +39,13 @@ class StreamEngine:
         hooks: WorkerHooksRunner | None = None,
         metrics: WorkerMetrics | None = None,
         queue_maxsize: int = 1024,
+        obs: ScopedObs | None = None,  # NEW
     ) -> None:
         self._registry = registry
         self._ctx = ctx
         self._hooks = hooks or WorkerHooksRunner(registry=registry)
         self._metrics = metrics or WorkerMetrics()
+        self._obs = obs  # NEW
 
         self._sources: list[tuple[str, SourceAdapter, str | None]] = []  # (alias, adapter, checkpoint_key)
         self._ops = OpsChain(ctx)
@@ -63,6 +59,12 @@ class StreamEngine:
         self._running = False
 
         self._ckpt_store: CheckpointsStore | None = None
+
+        # NEW: сигнал завершения всех источников
+        self._sources_left = 0
+        self._sources_done = asyncio.Event()
+
+    # ------------------------------ build / start / stop ----------------------
 
     async def build_from_plan(self, plan: Mapping[str, Any]) -> None:
         """
@@ -117,16 +119,61 @@ class StreamEngine:
         if ckpt_store:
             self._ckpt_store = ckpt_store  # expected to be CheckpointsStore-compatible
 
+        if self._obs:
+            with self._obs.log_context(stage="build"):
+                self._obs.base.logger.debug(
+                    "engine.build",
+                    merge=self._merge_name,
+                    sources=len(self._sources),
+                    ops=len(ops_union),
+                )
+
     async def start(self) -> None:
         """Begin pulling from sources and streaming through transforms to sinks."""
         if self._running:
             return
         self._running = True
+
         # Producer tasks (one per source)
+        self._sources_left = len(self._sources)
+        self._sources_done.clear()
+
         for alias, adapter, checkpoint_key in self._sources:
-            self._tasks.append(asyncio.create_task(self._run_source(alias, adapter, checkpoint_key)))
+
+            async def _wrap(_alias=alias, _adapter=adapter, _key=checkpoint_key):
+                try:
+                    await self._run_source(_alias, _adapter, _key)
+                finally:
+                    self._sources_left -= 1
+                    if self._sources_left <= 0:
+                        self._sources_done.set()
+
+            self._tasks.append(asyncio.create_task(_wrap(), name=f"src:{alias}"))
+
         # Consumer task (single sink writer)
-        self._tasks.append(asyncio.create_task(self._run_sinks()))
+        self._tasks.append(asyncio.create_task(self._run_sinks(), name="sinks"))
+
+        if self._obs:
+            with self._obs.log_context(stage="start"):
+                self._obs.base.logger.debug("engine.start", sources=len(self._sources))
+
+    async def wait_for_completion(self, *, poll_ms: int = 50) -> None:
+        """
+        Дождаться окончания всех источников и опустошения очереди.
+        Уважает флаг отмены из контекста.
+        """
+        try:
+            while True:
+                if getattr(self._ctx, "cancel_flag", None) is not None and self._ctx.cancel_flag.is_set():  # type: ignore[attr-defined]
+                    raise asyncio.CancelledError()
+                if self._sources_done.is_set() and self._queue.empty():
+                    return
+                await asyncio.sleep(max(1, int(poll_ms)) / 1000.0)
+        except asyncio.CancelledError:
+            if self._obs:
+                with self._obs.log_context(stage="cancel"):
+                    self._obs.base.logger.debug("engine.cancel.wait")
+            raise
 
     async def drain(self) -> None:
         """Flush sinks and gracefully stop sources (draining inflight)."""
@@ -142,12 +189,16 @@ class StreamEngine:
                 if hasattr(maybe, "__await__"):
                     await maybe
 
+        if self._obs:
+            with self._obs.log_context(stage="drain"):
+                self._obs.base.logger.debug("engine.drain")
+
     async def stop(self) -> None:
         """Hard-close all components. Used on cancellation/hard deadline."""
         await self.drain()
         await self._sinks.close()
 
-    # ---- internal ------------------------------------------------------------
+    # ------------------------------ internals ---------------------------------
 
     async def _run_source(self, alias: str, adapter: SourceAdapter, checkpoint_key: str | None) -> None:
         """
@@ -204,7 +255,19 @@ class StreamEngine:
                 self._queue.task_done()
                 self._metrics.queue_depth.set(self._queue.qsize())
 
-    # -------------------------------------------------------------------------
+    # ------------------------------ metrics -----------------------------------
+
+    def snapshot_metrics(self) -> dict[str, Any]:
+        """Снять простую метрику для TASK_DONE."""
+        return {
+            "items_in": self._metrics.items_in.value,
+            "items_out": self._metrics.items_out.value,
+            "batches_out": self._metrics.batches_out.value,
+            "queue_max": getattr(self._queue, "maxsize", 0),
+        }
+
+
+# ---- helpers ----------------------------------------------------------------
 
 
 def _create_source(registry: PluginRegistry, name: str, ctx: AdapterContext, args: Mapping[str, Any]) -> SourceAdapter:

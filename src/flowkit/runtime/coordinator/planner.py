@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...core.time import Clock, SystemClock
+from ...expr import Expr, parse_expr
 from ...graph.compiler import ExecutionPlan
-from ...graph.expr import Expr, parse_expr
 
 
 @dataclass(frozen=True)

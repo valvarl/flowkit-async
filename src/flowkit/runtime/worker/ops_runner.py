@@ -5,8 +5,8 @@ from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import Any, Union
 
 from ...api.adapters import AdapterContext, TransformOp
-from ...api.registry import PluginRegistry
 from ...api.streams import Batch, Item
+from ...ext.registry import PluginRegistry
 
 StreamEl = Union[Item, Batch]
 MaybeMany = Union[None, StreamEl, Iterable[StreamEl], AsyncIterator[StreamEl]]

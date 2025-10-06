@@ -9,11 +9,14 @@ from typing import Any
 
 from aiokafka import AIOKafkaConsumer
 
-from ..core.config import WorkerConfig
-from ..core.logging import bind_context, get_logger, log_context, swallow, warn_once
-from ..core.time import Clock, SystemClock
-from ..core.utils import stable_hash
-from ..protocol.messages import (
+from ...api import AdapterContext
+from ...core.config import WorkerConfig
+from ...core.logging import bind_context, get_logger, log_context, swallow, warn_once
+from ...core.time import Clock, SystemClock
+from ...core.utils import stable_hash
+from ...ext import PLUGIN_REGISTRY
+from ...plugins.handlers import Handler, HandlerResult, TaskContext, resolve_handler
+from ...protocol.messages import (
     CmdTaskCancel,
     CmdTaskStart,
     CommandKind,
@@ -24,7 +27,16 @@ from ..protocol.messages import (
     ReplyKind,
     Role,
 )
-from ..transport.kafka_bus import KafkaBus
+from ...runtime.common.observability import Observatory
+from ...runtime.worker.artifacts import ArtifactsWriter
+from ...runtime.worker.checkpoints import (
+    CheckpointsStore,  # already present
+    WorkerCheckpointStoreAdapter,
+)
+from ...runtime.worker.engine import StreamEngine
+from ...runtime.worker.metrics import WorkerMetrics
+from ...storage.factory import build_storage
+from ...transport.kafka_bus import KafkaBus
 from .state import ActiveRun
 
 
@@ -40,9 +52,9 @@ class Worker:
       - Deduplication for incoming command envelopes
 
     Execution engine integration:
-      - This version ships a no-op executor (immediate success).
-      - The `_run_task_engine()` method is the single hook to attach your
-        StreamEngine (sources → ops → sinks) later without breaking the API.
+      - This version ships a no-op executor and a "handler" role executor.
+      - The `_run_task_engine()` method is the single hook to attach a real
+        StreamEngine later (sources → ops → sinks).
 
     Notes:
       - The worker is single-concurrency per process by design; if you need
@@ -388,19 +400,13 @@ class Worker:
     # --------------------------------------------------------------------- handler/execution
 
     async def _run_task(self, role: str, start_env: Envelope, cmd: CmdTaskStart) -> None:
-        """
-        Outer task runner: executes the pipeline and emits terminal status.
-
-        This stub version finishes immediately with TASK_DONE, but preserves the
-        full control-plane protocol, so that upgrading to a real engine later
-        only requires implementing `_run_task_engine()`.
-        """
         try:
-            # --- TODO(engine): plug your StreamEngine here -------------------
-            # If you already have a PluginRegistry/StreamEngine/Stores ready,
-            # call `await self._run_task_engine(role, start_env, cmd)`.
-            await self._run_task_noop(role, start_env, cmd)
-            # -----------------------------------------------------------------
+            if role == "handler":
+                await self._run_task_handler(role, start_env, cmd)
+            elif role in ("stream", "engine"):
+                await self._run_task_engine(role, start_env, cmd)  # NEW
+            else:
+                await self._run_task_noop(role, start_env, cmd)
         except asyncio.CancelledError:
             # If the process is shutting down, keep silence; otherwise report CANCELLED.
             if not self._stopping:
@@ -428,6 +434,68 @@ class Worker:
             raise asyncio.CancelledError()
         await self._emit_task_done(role, base, metrics={}, artifacts_ref=None)
 
+    async def _run_task_handler(self, role: str, base: Envelope, cmd: CmdTaskStart) -> None:
+        """
+        Run a custom handler:
+          - Resolve handler name from cmd.input_inline["handler"] (fallback: "handlers.echo")
+          - Instantiate via registry/dynamic import
+          - Provide TaskContext with cancel_flag & minimal meta
+          - Call open/run/close; emit DONE/FAILED/CANCELLED accordingly
+        """
+        inline = cmd.input_inline or {}
+        # Allow nesting like {"handler": "handlers.echo", "args": {...}}
+        # or minimal {"handler": "handlers.echo"}
+        handler_name = inline.get("handler") or inline.get("handler_name") or inline.get("name") or "handlers.echo"
+        handler_args = dict(inline.get("args") or {})
+
+        # Resolve class and instantiate
+        cls = resolve_handler(str(handler_name))
+        handler: Handler = cls()  # type: ignore[call-arg]
+
+        # Context passed to handler
+        ctx = TaskContext(
+            task_id=base.task_id,
+            node_id=base.node_id,
+            attempt_epoch=base.attempt_epoch,
+            worker_id=self.worker_id,
+            cancel_flag=self._cancel_flag,
+            logger=self.log,
+            observability=None,
+            extra={"cmd": "TASK_START"},
+        )
+
+        # lifecycle
+        try:
+            maybe = handler.open(ctx, **handler_args)
+            if hasattr(maybe, "__await__"):
+                await maybe  # type: ignore[func-returns-value]
+
+            # cooperative cancellation gate right before run
+            if self._cancel_flag.is_set():
+                raise asyncio.CancelledError()
+
+            res: HandlerResult = await handler.run(ctx, **handler_args)  # type: ignore[arg-type]
+            metrics = dict(res.metrics or {})
+            await self._emit_task_done(role, base, metrics=metrics, artifacts_ref=res.artifacts_ref)
+        except asyncio.CancelledError:
+            await self._emit_cancelled(role, base, reason=self._cancel_meta.get("reason") or "cancelled")
+        except Exception as e:
+            await self._emit_task_failed(
+                role,
+                base,
+                reason="handler_error",
+                permanent=False,
+                error=str(e),
+            )
+        finally:
+            try:
+                maybe = handler.close()
+                if hasattr(maybe, "__await__"):
+                    await maybe  # type: ignore[func-returns-value]
+            except Exception:
+                # non-fatal
+                pass
+
     # Placeholder for future StreamEngine integration
     async def _run_task_engine(self, role: str, base: Envelope, cmd: CmdTaskStart) -> None:  # pragma: no cover
         """
@@ -452,7 +520,87 @@ class Worker:
         BATCH_OK / BATCH_FAILED can be emitted either from inside the engine
         via worker hooks, or synthesised here based on artifacts writes.
         """
-        raise NotImplementedError
+        inline = cmd.input_inline or {}
+
+        # План может прийти целиком или как части; нормализуем до {"input":...,"output":...}
+        if "plan" in inline and isinstance(inline["plan"], dict):
+            plan = inline["plan"]
+        else:
+            plan = {
+                "input": {
+                    "merge": (inline.get("input") or {}).get("merge", {"name": "interleave"}),
+                    "sources": (inline.get("input") or {}).get("sources") or inline.get("sources") or [],
+                },
+                "output": (inline.get("output") or {}),
+            }
+
+        # Контекст для адаптеров
+        ctx = AdapterContext(
+            task_id=base.task_id,
+            node_id=base.node_id,
+            attempt_epoch=base.attempt_epoch,
+            worker_id=self.worker_id,
+            cancel_flag=self._cancel_flag,
+        )
+
+        # Инициализируем хранилища (по возможности)
+        storage = None
+        artifacts_writer = None
+        checkpoints_store = None
+        dsn = getattr(self.cfg, "storage_dsn", None)
+        if dsn:
+            storage = await build_storage(dsn)
+            try:
+                # адаптер scope/key → (task,node,attempt,key)
+                wk = WorkerCheckpointStoreAdapter(storage.checkpoints)
+                checkpoints_store = CheckpointsStore(
+                    offsets=wk,
+                    task_id=base.task_id,
+                    node_id=base.node_id,
+                    attempt_epoch=base.attempt_epoch,
+                )
+                artifacts_writer = ArtifactsWriter(
+                    storage.artifacts, task_id=base.task_id, node_id=base.node_id, attempt_epoch=base.attempt_epoch
+                )
+            except Exception:
+                # best-effort wiring; стрим может работать и без стора
+                checkpoints_store = None
+                artifacts_writer = None
+
+        # Втыкаем в контекст (через динамические атрибуты, чтобы не зависеть от сигнатуры)
+        if checkpoints_store is not None:
+            ctx.checkpoints = checkpoints_store
+        if artifacts_writer is not None:
+            ctx.artifacts = artifacts_writer
+
+        # Обсервабилити с обогащением контекста
+        obs = Observatory.create(service_name="worker").scoped(
+            task_id=base.task_id, node_id=base.node_id, attempt=base.attempt_epoch
+        )
+
+        # Запуск движка
+        engine = StreamEngine(
+            registry=PLUGIN_REGISTRY,  # глобальный реестр плагинов
+            ctx=ctx,
+            hooks=None,
+            metrics=WorkerMetrics(),  # локальные счётчики движка
+            queue_maxsize=getattr(self.cfg, "engine_queue_maxsize", 1024),
+            obs=obs,
+        )
+        await engine.build_from_plan(plan)
+        await engine.start()
+
+        try:
+            # ждём, пока источники исчерпают себя и очередь опустеет
+            await engine.wait_for_completion()
+        finally:
+            await engine.drain()
+            await engine.stop()
+            if storage is not None:
+                await storage.close()
+
+        # DONE
+        await self._emit_task_done(role, base, metrics=engine.snapshot_metrics(), artifacts_ref=None)
 
     # --------------------------------------------------------------------- heartbeats
 

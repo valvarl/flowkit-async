@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...api.registry import PluginRegistry
 from ...api.streams import Batch, Item
+from ...ext.registry import PluginRegistry
 
 
 class WorkerHooksRunner:

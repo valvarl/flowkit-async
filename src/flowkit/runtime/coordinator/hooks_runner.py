@@ -7,8 +7,7 @@ Coordinator-side hooks runner.
 Matches HookSpec selectors (on/source/output/every_n/throttle) and executes
 registered HookAction implementations from the PluginRegistry.
 
-This module focuses on low-cardinality, side-effect-safe hooks such as metrics,
-audit events, notifications, or vars operations.
+Focus: low-cardinality, side-effect-safe hooks (metrics, audit, notify, HTTP).
 """
 
 import time
@@ -17,8 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...api.hooks import HookAction, HookContext, HookEvent
-from ...api.registry import PluginRegistry
-from ...core.logging import get_logger
+from ...ext.registry import PluginRegistry
+from ..common.observability import Observatory
 
 
 @dataclass(frozen=True)
@@ -38,18 +37,23 @@ class _CompiledHook:
 
 class HooksRunner:
     """
-    Loads hook specs from the compiled plan for a node, resolves action
-    implementations via the PluginRegistry and executes matching actions.
+    Loads hook specs from a node's compiled plan, resolves actions via PluginRegistry,
+    and executes matching actions with best-effort throttling.
     """
 
-    def __init__(self, registry: PluginRegistry) -> None:
+    def __init__(self, registry: PluginRegistry | None = None, *, observatory: Observatory | None = None) -> None:
         self._registry = registry
-        self._log = get_logger("coordinator.hooks")
+        self._obs = observatory
         # state for every_n / throttle
         self._counters: MutableMapping[str, int] = {}
         self._last_ts: MutableMapping[str, float] = {}
 
     def compile_node_hooks(self, hooks_spec: Iterable[Mapping[str, Any]]) -> list[_CompiledHook]:
+        if not hooks_spec:
+            return []
+        if self._registry is None:
+            # No registry provided — nothing to resolve
+            return []
         compiled: list[_CompiledHook] = []
         for h in hooks_spec:
             when = h.get("when") or {}
@@ -64,7 +68,7 @@ class HooksRunner:
             for a in h.get("actions", []):
                 t = a.get("type", "")
                 cls = self._registry.hook_action(t)  # may raise if unknown
-                actions.append(cls())  # actions are assumed to be lightweight
+                actions.append(cls())  # action instances are assumed lightweight
             compiled.append(_CompiledHook(selector=selector, actions=actions))
         return compiled
 
@@ -84,6 +88,9 @@ class HooksRunner:
         ctx_clock: Any | None = None,
     ) -> None:
         """Emit one event, executing matching hook actions."""
+        if not compiled_hooks:
+            return
+
         ev = HookEvent(
             on=on, node_id=node_id, task_id=str(event_meta.get("task_id")) if event_meta else "", meta=event_meta or {}
         )
@@ -91,9 +98,11 @@ class HooksRunner:
             params=ctx_params or {},
             vars=ctx_vars or {},
             externals=ctx_externals or {},
-            logger=ctx_logger or self._log,
+            logger=ctx_logger or (self._obs.logger if self._obs else None),
             clock=ctx_clock,
+            observatory=self._obs,
         )
+
         for ch in compiled_hooks:
             if not self._matches(ch.selector, on, source, output, node_id):
                 continue
@@ -111,9 +120,15 @@ class HooksRunner:
                 self._counters[key] = cnt
                 if cnt % ch.selector.every_n != 0:
                     continue
-            # run actions
+            # run actions (best effort, hook is responsible for its own errors)
             for a in ch.actions:
-                await a.run(cctx, ev, args=self._find_action_args(ch.selector, on, source, output, node_id))
+                try:
+                    await a.run(cctx, ev, args={})
+                except Exception:
+                    if self._obs:
+                        self._obs.logger.debug(
+                            "hook.failed", action=getattr(a, "name", "hook"), on=on, node_id=node_id, exc_info=True
+                        )
 
     # ---- helpers
 
@@ -128,11 +143,3 @@ class HooksRunner:
 
     def _key(self, node_id: str, sel: HookSelector) -> str:
         return f"{node_id}:{sel.on}:{sel.source or '-'}:{sel.output or '-'}"
-
-    def _find_action_args(
-        self, sel: HookSelector, on: str, source: str | None, output: str | None, node_id: str
-    ) -> dict[str, Any]:
-        # Coordinator-side hooks usually keep args in the spec per action; since the compiled form
-        # already resolved them into the action instance (via registry), action classes can take
-        # their own defaults. This helper exists for future extension if you want to feed per-event args.
-        return {}

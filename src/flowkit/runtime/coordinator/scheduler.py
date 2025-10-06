@@ -49,7 +49,7 @@ class Scheduler:
     def cancel(self, task_id: str, node_id: str) -> int:
         """Remove queued items; returns the number of removed items."""
         removed = 0
-        for prio, by_key in self._queues.items():
+        for by_key in self._queues.values():
             for key, q in by_key.items():
                 keep: deque[QueueItem] = deque()
                 while q:

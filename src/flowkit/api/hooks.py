@@ -35,6 +35,14 @@ class HookEvent:
 class HookContext:
     """
     Execution context for hook actions.
+
+    Attributes:
+        params: task parameters.
+        vars: task-scoped vars snapshot.
+        externals: optional external facts.
+        logger: logger to use for hook logs.
+        clock: optional clock.
+        observatory: full observability facade (logger/meter/tracer), if available.
     """
 
     params: Mapping[str, Any]
@@ -42,6 +50,7 @@ class HookContext:
     externals: Mapping[str, Any]
     logger: Any
     clock: Any
+    observatory: Any | None = None
 
 
 @dataclass(frozen=True)
