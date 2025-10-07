@@ -4,10 +4,17 @@ from __future__ import annotations
 """
 FlowKit Coordinator (MVP v2)
 
-- Plans → schedules → dispatches start commands
-- Reacts to worker events (accepted/heartbeat/batch/done/failed/cancelled)
-- Triggers children on on_batch/on_done
-- Uses common OutboxDispatcher and Observatory
+This coordinator implements:
+- Planning & scheduling per-node runs
+- Fan-out: `on_batch` and `on_done` (including dynamic edges via expressions)
+- Gate/approval evaluation via Planner
+- Task-wide cancellation cascade
+- Finalizer loop and heartbeat monitor bound to TaskStore
+
+Notes:
+- ArtifactStore usage is optional and not required for this stage; workers can
+  persist artifacts directly and send references in events. Coordinator keeps
+  scheduling logic strictly storage-agnostic.
 """
 
 import asyncio
@@ -16,9 +23,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ...core.logging import get_logger
+from ...core.time import Clock, SystemClock
 from ...core.utils import stable_hash
 from ...graph.compiler import ExecutionPlan, prepare_for_task_create_v21
-from ...io.validation import normalize_adapter_args, validate_input_adapter
 from ...protocol.messages import (
     CmdTaskStart,
     CommandKind,
@@ -84,9 +92,10 @@ class Coordinator:
         hooks: HooksRunner | None = None,
         metrics: CoordinatorMetrics | None = None,
         opts: CoordinatorOpts | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.tasks = tasks
-        self.artifacts = artifacts
+        self.artifacts = artifacts  # Optional for this stage
         self.kv = kv
         self.outbox = outbox
         self.bus = bus
@@ -96,6 +105,10 @@ class Coordinator:
         self.hooks = hooks or HooksRunner(registry=None, observatory=self.obs)
         self.metrics = metrics or CoordinatorMetrics.create(self.obs.meter)
         self.opts = opts or CoordinatorOpts()
+        self.clock = clock or SystemClock()
+
+        # Custom coordinator logger (separate from Observatory.logger if needed)
+        self.log = get_logger("coordinator")
 
         self._running = False
         self._bg: set[asyncio.Task] = set()
@@ -135,6 +148,8 @@ class Coordinator:
             plan=plan.model_dump(mode="json"),
             runtime=runtime,
             status=RunState.queued.value,
+            created_ms=self.clock.now_ms(),
+            last_event_ms=0,
         )
         await self.tasks.create(tdoc)
         with self.obs.scoped(task_id=task_id).log_context(event="task.created"):
@@ -145,7 +160,8 @@ class Coordinator:
         doc = await self.tasks.get(task_id)
         if not doc:
             return False
-        await self.tasks.flag_cancel(task_id=task_id, reason=reason)
+        # Mark task as deferred (task-level); nodes will be moved to 'cancelling' and signalled
+        await self.tasks.defer_task(task_id=task_id, reason=reason)
         await self._cascade_cancel(doc, reason=reason)
         return True
 
@@ -181,12 +197,12 @@ class Coordinator:
         try:
             while self._running:
                 await self._schedule_tick()
-                await asyncio.sleep(self.opts.scheduler_tick_ms / 1000.0)
+                await self.clock.sleep(self.opts.scheduler_tick_ms / 1000.0)
         except asyncio.CancelledError:
             return
         except Exception:
             with self.obs.scoped().log_context(event="scheduler.loop.crashed"):
-                self.obs.logger.exception("scheduler.loop.crashed")
+                self.log.exception("scheduler.loop.crashed")
 
     async def _dispatch_loop(self) -> None:
         tick_ms = self.opts.dispatch_tick_ms
@@ -195,7 +211,7 @@ class Coordinator:
             while self._running:
                 picked = self._sched.pop_ready(max_n=batch)
                 if not picked:
-                    await asyncio.sleep(tick_ms / 1000.0)
+                    await self.clock.sleep(tick_ms / 1000.0)
                     continue
                 for it in picked:
                     key = (it.task_id, it.node_id)
@@ -211,7 +227,7 @@ class Coordinator:
             return
         except Exception:
             with self.obs.scoped().log_context(event="dispatch.loop.crashed"):
-                self.obs.logger.exception("dispatch.loop.crashed")
+                self.log.exception("dispatch.loop.crashed")
 
     async def _schedule_tick(self) -> None:
         """
@@ -232,13 +248,9 @@ class Coordinator:
             vars_map = await self.vars.get_all(doc.task_id)
 
             # Evaluate all nodes that are not in a terminal state
-            for node in await self.tasks.iter_task_nodes(doc.task_id):
+            async for node in self.tasks.iter_task_nodes(doc.task_id):
                 node_rs = _runstate(node.status)
                 if node_rs not in (RunState.queued, RunState.deferred):
-                    continue
-
-                # Fast path: start_when == first_batch (checked by _node_ready)
-                if not await self._node_ready(doc, node):
                     continue
 
                 # Planner-based start policy: parents/externals/vars/params
@@ -255,7 +267,7 @@ class Coordinator:
                 if not begin_ok:
                     continue
 
-                # Build IO plan (source/pull) and enqueue cmd
+                # Build optional IO plan and enqueue cmd
                 io_plan = await self._build_io_plan(doc, node)
                 await self._prepare_start(
                     task=doc,
@@ -287,34 +299,22 @@ class Coordinator:
         )
 
     async def _on_batch_ok(self, env: Envelope) -> None:
-        p = EvBatchOk.model_validate(env.payload)
-        # Persist partial artifact if present
-        if p.artifacts_ref is not None:
-            await self.artifacts.upsert_partial(
-                task_id=env.task_id,
-                node_id=env.node_id,
-                batch_uid=p.batch_uid,
-                meta=p.metrics or {},
-                ref=p.artifacts_ref,
-            )
-        # Opportunistic fan-out for "first_batch" consumers and edges_ex on on_batch
+        _ = EvBatchOk.model_validate(env.payload)  # parsed for validation side-effect
+        # Hooks (coordinator-side) for on_batch
+        await self._emit_hooks(env.task_id, env.node_id, on="on_batch")
+        # Fan-out for "on_batch" children (dynamic edges + static children via start policies)
         await self._trigger_children_on_event(env, trigger="on_batch")
 
     async def _on_batch_failed(self, env: Envelope) -> None:
         p = EvBatchFailed.model_validate(env.payload)
-        await self.artifacts.mark_failed(
-            task_id=env.task_id, node_id=env.node_id, batch_uid=p.batch_uid, reason=p.reason_code
-        )
+        # Coordinator-level hook for failed batch
+        await self._emit_hooks(env.task_id, env.node_id, on="on_failed", meta={"reason": p.reason_code})
 
     async def _on_task_done(self, env: Envelope) -> None:
-        p = EvTaskDone.model_validate(env.payload)
-        # Final artifact (may be absent — e.g., control nodes)
-        if p.artifacts_ref is not None:
-            await self.artifacts.upsert_final(
-                task_id=env.task_id, node_id=env.node_id, meta=p.metrics or {}, ref=p.artifacts_ref
-            )
+        _ = EvTaskDone.model_validate(env.payload)
         await self.tasks.finish_node(task_id=env.task_id, node_id=env.node_id)
         await self._release_concurrency(env)
+        await self._emit_hooks(env.task_id, env.node_id, on="on_done")
         # Fan-out: children with on_done edges (static + dynamic)
         await self._trigger_children_on_event(env, trigger="on_done")
 
@@ -322,20 +322,23 @@ class Coordinator:
         p = EvTaskFailed.model_validate(env.payload)
         if p.permanent:
             await self.tasks.fail_node(task_id=env.task_id, node_id=env.node_id, reason=p.reason_code)
+            await self._emit_hooks(env.task_id, env.node_id, on="on_failed", meta={"reason": p.reason_code})
             # Hard-fail task cascade
             doc = await self.tasks.get(env.task_id)
             if doc:
                 await self.tasks.fail_task(task_id=env.task_id, reason=f"hard_fail:{p.reason_code}")
                 await self._cascade_cancel(doc, reason=f"hard_fail:{p.reason_code}")
         else:
-            # Soft failure → defer with backoff (TaskStore decides the next_retry_at_ms)
+            # Soft failure → defer (TaskStore may implement backoff externally)
             await self.tasks.defer_node(task_id=env.task_id, node_id=env.node_id, reason=p.reason_code)
+            await self._emit_hooks(env.task_id, env.node_id, on="on_failed", meta={"reason": p.reason_code})
         await self._release_concurrency(env)
 
     async def _on_cancelled(self, env: Envelope) -> None:
         # Worker reported cancellation completed (coordinator initiated earlier)
         await self.tasks.defer_node(task_id=env.task_id, node_id=env.node_id, reason="cancelled")
         await self._release_concurrency(env)
+        await self._emit_hooks(env.task_id, env.node_id, on="on_cancelled")
 
     # ---- helpers -------------------------------------------------------------
 
@@ -348,7 +351,7 @@ class Coordinator:
             if task.cancelled():
                 return
             if exc := task.exception():
-                self.obs.logger.exception("coordinator.task.crashed", exc_info=exc)
+                self.log.exception("coordinator.task.crashed", exc_info=exc)
 
         t.add_done_callback(_done)
 
@@ -357,7 +360,7 @@ class Coordinator:
     ) -> EvalContext:
         """Build expression environment for start/gate/edges evaluation."""
         # Parent snapshots
-        parents = {}
+        parents: dict[str, ParentSnapshot] = {}
         for pid in planner.plan.parents_by_child.get(node.node_id, []):
             ps = await self.tasks.get_node(doc.task_id, pid)
             parents[pid] = ParentSnapshot(
@@ -366,8 +369,10 @@ class Coordinator:
                 batch=False,  # streaming predicates may be plugged later
                 exists=bool(ps),
             )
-        # External snapshots (the resolver can be injected later; default all False)
-        externals = {name: ExternalSnapshot(ready=False) for name in (planner.plan.graph_externals or {}).keys()}
+        # External snapshots (resolver TBD → default all False)
+        externals = {
+            name: ExternalSnapshot(ready=False) for name in (getattr(planner.plan, "graph_externals", {}) or {}).keys()
+        }
         return EvalContext(
             params=dict(doc.params or {}),
             vars=dict(vars_map or {}),
@@ -375,55 +380,13 @@ class Coordinator:
             externals=externals,
         )
 
-    async def _node_ready(self, doc: TaskDoc, node: NodeSnapshot) -> bool:
-        """
-        Additional readiness gate for "first_batch" sources.
-
-        If the node declares 'start_when=first_batch' in its runtime IO, we wait
-        until at least one partial/final artifact exists from any of its parents.
-        """
-        io = node.io or {}
-        start_when = str((io.get("start") or {}).get("when") or "").lower()
-        if start_when != "first_batch":
-            return True
-        parents = node.parents or []
-        if not parents:
-            return False
-        return await self.artifacts.any_ready_from(task_id=doc.task_id, parent_ids=parents)
-
     async def _build_io_plan(self, doc: TaskDoc, node: NodeSnapshot) -> dict[str, Any] | None:
         """
-        Produce `input_inline` for CmdTaskStart when applicable.
-
-        Rules:
-          - If node.io.input already present → validate adapter & args; return normalized.
-          - Else if node has parents → set pull.from_artifacts(from_nodes=parents).
-          - Else → None (source node; workers will prepare their own inputs).
+        Produce optional `input_inline` for CmdTaskStart.
+        This MVP returns None and lets workers derive their own inputs.
         """
-        io = node.io or {}
-        inp = io.get("input") or {}
-        if inp:
-            # Expect normalized structure from ExecutionPlan → pass-through with minimal checks
-            adapter = (inp.get("sources") or [{}])[0].get("adapter", {}).get("name") if inp.get("sources") else None
-            args = (inp.get("sources") or [{}])[0].get("adapter", {}).get("args") if inp.get("sources") else {}
-            if adapter:
-                from_nodes, kwargs_norm = normalize_adapter_args(args or {})
-                ok, why = validate_input_adapter(adapter, {**kwargs_norm, "from_nodes": from_nodes}, strict=False)
-                if not ok:
-                    raise ValueError(f"node {node.node_id}: {why}")
-                return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": from_nodes}}
-            # If sources[] missing adapter, return None — worker side may be fully declarative.
-            return None
-
-        parents = list(node.parents or [])
-        if not parents:
-            return None
-        adapter = "pull.from_artifacts"
-        from_nodes, kwargs_norm = normalize_adapter_args({"from_nodes": parents})
-        ok, why = validate_input_adapter(adapter, {**kwargs_norm, "from_nodes": from_nodes}, strict=False)
-        if not ok:
-            raise ValueError(f"node {node.node_id}: {why}")
-        return {"input_adapter": adapter, "input_args": {**kwargs_norm, "from_nodes": parents}}
+        _ = (doc, node)  # unused in MVP
+        return None
 
     async def _prepare_start(
         self, *, task: TaskDoc, node: NodeSnapshot, epoch: int, io_plan: dict[str, Any] | None
@@ -440,6 +403,7 @@ class Coordinator:
             node_id=node.node_id,
             step_type=node.type,
             attempt_epoch=epoch,
+            ts_ms=self.clock.now_ms(),
             payload=cmd.model_dump(),
         )
         cq = node.concurrency or {}
@@ -459,8 +423,8 @@ class Coordinator:
         """
         Schedule children upon parent worker event (on_batch/on_done).
 
-        - Static children: respect start policies (Planner).
         - Dynamic edges_ex: evaluate 'when' and only trigger enabled edges.
+        - Static children: respect start policies (Planner).
         """
         doc = await self.tasks.get(env.task_id)
         if not doc:
@@ -468,42 +432,51 @@ class Coordinator:
         plan = ExecutionPlan.model_validate(doc.plan)
         planner = Planner(plan=plan)
 
-        # Evaluate dynamic edges for this trigger
-        # (coordinator evaluates, then children will pass their own readiness gates)
-        if plan.dynamic_edges:
-            ctx = await self._build_eval_ctx(
-                doc,
-                await self.tasks.get_node(env.task_id, env.node_id),
-                planner,
-                await self.vars.get_all(env.task_id),
-            )
-            for e in planner.iter_enabled_edges(ctx):
-                if e.get("from") == env.node_id and e.get("on") == f"on_{trigger.split('_')[-1]}":
-                    ch = e.get("to")
-                    if not ch:
-                        continue
-                    ch_node = await self.tasks.get_node(env.task_id, ch)
-                    if ch_node and await self._node_ready(doc, ch_node):
-                        begin_ok, new_epoch, _lease = await self.tasks.begin_node(task_id=env.task_id, node_id=ch)
-                        if begin_ok:
-                            io_plan = await self._build_io_plan(doc, ch_node)
-                            await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
+        vars_map = await self.vars.get_all(env.task_id)
+        parent_node = await self.tasks.get_node(env.task_id, env.node_id)
+        if not parent_node:
+            return
+        ctx = await self._build_eval_ctx(doc, parent_node, planner, vars_map)
 
-        # Static children (parents_by_child)
+        # Dynamic edges (only those that match this trigger)
+        for e in planner.iter_enabled_edges(ctx):
+            if e.get("from") != env.node_id:
+                continue
+            if e.get("on") not in ("on_batch", "on_done"):
+                continue
+            if (trigger == "on_batch" and e.get("on") != "on_batch") or (
+                trigger == "on_done" and e.get("on") != "on_done"
+            ):
+                continue
+            child_id = e.get("to")
+            if not child_id:
+                continue
+            ch_node = await self.tasks.get_node(env.task_id, child_id)
+            if not ch_node:
+                continue
+            # Start policy still applies
+            ch_ctx = await self._build_eval_ctx(doc, ch_node, planner, vars_map)
+            if not planner.evaluate_start(child_id, ch_ctx).ready:
+                continue
+            begin_ok, new_epoch, _ = await self.tasks.begin_node(task_id=env.task_id, node_id=child_id)
+            if not begin_ok:
+                continue
+            io_plan = await self._build_io_plan(doc, ch_node)
+            await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
+
+        # Static children off the parent (parents_by_child)
         for child_id in plan.children_by_parent.get(env.node_id, []) or []:
             ch_node = await self.tasks.get_node(env.task_id, child_id)
             if not ch_node:
                 continue
-            if await self._node_ready(doc, ch_node):
-                ctx = await self._build_eval_ctx(doc, ch_node, planner, await self.vars.get_all(env.task_id))
-                dec = planner.evaluate_start(child_id, ctx)
-                if not dec.ready:
-                    continue
-                begin_ok, new_epoch, _lease = await self.tasks.begin_node(task_id=env.task_id, node_id=child_id)
-                if not begin_ok:
-                    continue
-                io_plan = await self._build_io_plan(doc, ch_node)
-                await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
+            ch_ctx = await self._build_eval_ctx(doc, ch_node, planner, vars_map)
+            if not planner.evaluate_start(child_id, ch_ctx).ready:
+                continue
+            begin_ok, new_epoch, _ = await self.tasks.begin_node(task_id=env.task_id, node_id=child_id)
+            if not begin_ok:
+                continue
+            io_plan = await self._build_io_plan(doc, ch_node)
+            await self._prepare_start(task=doc, node=ch_node, epoch=new_epoch, io_plan=io_plan)
 
     async def _cascade_cancel(self, doc: TaskDoc, *, reason: str) -> None:
         """
@@ -521,7 +494,7 @@ class Coordinator:
                     "sig": "CANCEL",
                     "reason": reason,
                     "cancel_token": None,
-                    "deadline_ts_ms": 0,  # your worker may enforce a grace period
+                    "deadline_ts_ms": 0,  # workers may enforce a grace period
                 }
                 env = Envelope(
                     msg_type=MsgType.event,
@@ -533,6 +506,7 @@ class Coordinator:
                     node_id=n.node_id,
                     step_type=n.type,
                     attempt_epoch=int(n.attempt_epoch or 0),
+                    ts_ms=self.clock.now_ms(),
                     payload=payload,
                     target_worker_id=n.lease.worker_id,
                 )
@@ -546,6 +520,26 @@ class Coordinator:
         cq = node.concurrency or {}
         self._sched.release(cq.get("concurrency_key"))
 
+    async def _emit_hooks(self, task_id: str, node_id: str, *, on: str, meta: Mapping[str, Any] | None = None) -> None:
+        """Run coordinator-side hooks for a node event (best-effort)."""
+        doc = await self.tasks.get(task_id)
+        if not doc:
+            return
+        plan = ExecutionPlan.model_validate(doc.plan)
+        hooks_spec_map = getattr(plan, "hooks", {}) or {}
+        hooks_spec = hooks_spec_map.get(node_id) or []
+        compiled = self.hooks.compile_node_hooks(hooks_spec)
+        await self.hooks.emit(
+            node_id=node_id,
+            compiled_hooks=compiled,
+            on=on,
+            event_meta={"task_id": task_id, **(meta or {})},
+            ctx_params=doc.params,
+            ctx_vars=await self.vars.get_all(task_id),
+            ctx_externals={name: {"ready": False} for name in (getattr(plan, "graph_externals", {}) or {}).keys()},
+            ctx_logger=self.obs.logger,
+        )
+
     # ---- monitors ------------------------------------------------------------
 
     async def _heartbeat_monitor(self) -> None:
@@ -557,11 +551,11 @@ class Coordinator:
                         await self.tasks.fail_task(task_id=t.task_id, reason="liveness:hard_timeout")
                     elif dt_ms >= self.opts.hb_soft_timeout_ms:
                         await self.tasks.defer_task(task_id=t.task_id, reason="liveness:soft_timeout")
-                await asyncio.sleep(1.0)
+                await self.clock.sleep(1.0)
         except asyncio.CancelledError:
             return
         except Exception:
-            self.obs.logger.exception("heartbeat.monitor.crashed")
+            self.log.exception("heartbeat.monitor.crashed")
 
     async def _finalizer_loop(self) -> None:
         try:
@@ -569,11 +563,11 @@ class Coordinator:
                 async for t in self.tasks.iter_active():
                     if await self.tasks.is_task_complete(t.task_id):
                         await self.tasks.finish_task(t.task_id)
-                await asyncio.sleep(self.opts.finalizer_tick_ms / 1000.0)
+                await self.clock.sleep(self.opts.finalizer_tick_ms / 1000.0)
         except asyncio.CancelledError:
             return
         except Exception:
-            self.obs.logger.exception("finalizer.loop.crashed")
+            self.log.exception("finalizer.loop.crashed")
 
     # ---- Topic helpers -------------------------------------------------------
 
@@ -588,23 +582,48 @@ class Coordinator:
     def _mk_vars_backend(self, kv: KVStore):
         """
         Minimal adapter turning KVStore into VarsBackend for VarsStore.
-        The KVStore implementation should expose CAS semantics (version/etag).
+
+        Supports both legacy KV API (get_with_version/compare_and_set) and a newer
+        CAS-style API (get/cas) if present.
         """
 
         class _Backend:
             def __init__(self, kvs: KVStore) -> None:
                 self.kv = kvs
+                # Legacy API namespace fields
                 self.ns = "task_vars"
+                # New API single-key prefix
+                self.prefix = "task_vars:"
 
             async def load(self, task_id: str) -> Mapping[str, Any]:
-                v = await self.kv.get(self.ns, task_id)
+                # Prefer legacy tuple-namespace API if available
+                if hasattr(self.kv, "get_with_version"):
+                    v, _ver = await self.kv.get_with_version(self.ns, task_id)  # type: ignore[attr-defined]
+                    return v or {}
+                # Fallback to new API
+                v = await self.kv.get(f"{self.prefix}{task_id}")  # type: ignore[arg-type]
                 return v or {}
 
             async def cas_update(self, task_id: str, updater):
-                cur, ver = await self.kv.get_with_version(self.ns, task_id)
-                cur_map = dict(cur or {})
-                new_map = updater(cur_map)
-                return await self.kv.compare_and_set(self.ns, task_id, expected_version=ver, value=new_map)
+                # Legacy CAS path
+                if hasattr(self.kv, "get_with_version") and hasattr(self.kv, "compare_and_set"):
+                    cur, ver = await self.kv.get_with_version(self.ns, task_id)  # type: ignore[attr-defined]
+                    cur_map = dict(cur or {})
+                    new_map = updater(cur_map)
+                    return await self.kv.compare_and_set(  # type: ignore[attr-defined]
+                        self.ns, task_id, expected_version=ver, value=new_map
+                    )
+                # New API CAS path
+                key = f"{self.prefix}{task_id}"
+                cur = await self.kv.get(key) or {}  # type: ignore[arg-type]
+                new_map = updater(dict(cur))
+                if hasattr(self.kv, "cas"):
+                    return await self.kv.cas(key, expect=cur, update=new_map)  # type: ignore[attr-defined]
+                # If no CAS available, last-write-wins (not ideal, but prevents hard failure)
+                if hasattr(self.kv, "set"):
+                    await self.kv.set(key, new_map)  # type: ignore[attr-defined]
+                    return True
+                return False
 
         return _Backend(kv)
 

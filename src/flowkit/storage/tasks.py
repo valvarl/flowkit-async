@@ -2,19 +2,18 @@
 from __future__ import annotations
 
 """
-Task store interface (DB-agnostic).
+Task store interface (DB-agnostic) with per-node lifecycle.
 
 Responsibilities:
-- Persist TaskDoc (graph slices, params, execution plan).
-- Manage leases (worker_id/lease_id/deadline).
-- Track run state and progress snapshots.
-- Update task-level vars (coordinator-controlled).
+- Persist TaskDoc (plan/runtime slices, params, minimal status).
+- Manage per-node run state, attempt epochs and worker leases.
+- Track task-level liveness (last_event_ms) for heartbeat monitors.
 
-This intentionally does not model *all* coordinator data structures; it is the
-stable minimum that both coordinator and worker depend on.
+This module intentionally models a small, stable contract used by the Coordinator.
+It does NOT prescribe the full internal schema of a storage backend.
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -24,6 +23,7 @@ from .base.errors import StorageError
 
 __all__ = [
     "LeaseInfo",
+    "NodeSnapshot",
     "TaskDoc",
     "TaskStore",
     "TaskStoreError",
@@ -37,11 +37,11 @@ class TaskStoreError(StorageError):
 @dataclass(frozen=True)
 class LeaseInfo:
     """
-    Task lease granted to a worker.
+    Worker lease info.
 
     Attributes:
-        worker_id: Worker that owns the lease.
-        lease_id: Opaque token that must be presented to renew/release.
+        worker_id: Worker that currently owns the lease.
+        lease_id: Opaque token the worker must present to renew/release.
         deadline_ms: Epoch milliseconds when the lease expires.
     """
 
@@ -51,111 +51,143 @@ class LeaseInfo:
 
 
 @dataclass
+class NodeSnapshot:
+    """
+    Minimal per-node state returned to the Coordinator.
+
+    Attributes:
+        task_id: Parent task id.
+        node_id: Node identifier within the task.
+        type: Worker role/type used for dispatch routing.
+        parents: Static list of parent node ids.
+        io: Minimal runtime IO slice (used for readiness gates on coordinator).
+        concurrency: Concurrency policy slice (priority/key/limit).
+        status: Current run state (queued/running/deferred/cancelling/finished/failed) as string.
+        attempt_epoch: Monotonic attempt counter; incremented on every "begin_node".
+        lease: Current worker lease (if any).
+    """
+
+    task_id: str
+    node_id: str
+    type: str
+    parents: list[str] = field(default_factory=list)
+    io: dict[str, Any] | None = None
+    concurrency: dict[str, Any] | None = None
+    status: str = RunState.queued.value
+    attempt_epoch: int = 0
+    lease: LeaseInfo | None = None
+
+
+@dataclass
 class TaskDoc:
     """
     Minimal task document persisted in the store.
 
-    Attributes:
-        task_id: Stable identifier.
-        created_ms: Creation timestamp (epoch ms).
-        state: Current run state (queued/running/…).
-        attempt_epoch: Monotonic attempt counter incremented on retries/resume.
-        worker_id: Worker currently owning the lease (if any).
-        lease_id: Opaque lease token.
-        lease_deadline_ms: Lease expiry timestamp.
-        params: Runtime parameters (visible to expressions).
-        vars: Coordinator-managed mutable store (small, low-cardinality).
-        execution_plan: Compiled plan (subset used by coordinator; workers receive baked snippets).
-        runtime_graph: Minimal runtime graph slice (for coordinator).
-        progress: Implementation-defined progress snapshot (small).
-        artifacts: Optional references to final artifacts summary.
-        meta: Free-form metadata (owner, tags, etc).
+    Coordinator expects these fields on reads:
+        task_id, schema_version, params, plan, runtime, status
+
+    Backends MAY store additional bookkeeping fields (created_ms, last_event_ms, etc.).
     """
 
     task_id: str
-    created_ms: int
-    state: RunState = RunState.queued
-    attempt_epoch: int = 0
-
-    worker_id: str | None = None
-    lease_id: str | None = None
-    lease_deadline_ms: int | None = None
-
+    schema_version: str
     params: dict[str, Any] = field(default_factory=dict)
-    vars: dict[str, Any] = field(default_factory=dict)
+    plan: dict[str, Any] = field(default_factory=dict)
+    runtime: dict[str, Any] = field(default_factory=dict)
+    status: str = RunState.queued.value
 
-    execution_plan: dict[str, Any] | None = None
-    runtime_graph: dict[str, Any] | None = None
-
-    progress: dict[str, Any] | None = None
-    artifacts: dict[str, Any] | None = None
-
+    # Optional, used by backends and monitors
+    created_ms: int = 0
+    last_event_ms: int = 0
     meta: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
 class TaskStore(Protocol):
     """
-    Async CRUD + leasing for TaskDoc.
-
-    Notes:
-        - All methods MUST be idempotent where sensible (e.g., create with same doc).
-        - Lease methods MUST ensure only one active lease per task.
-        - State transitions SHOULD be validated by the coordinator; the store
-          MAY perform lightweight guards (e.g., cannot set running without a lease).
+    Async task and per-node lifecycle API expected by the Coordinator.
     """
 
-    # ---- CRUD ----
+    # ---- Task CRUD ----
 
     async def create(self, doc: TaskDoc) -> None: ...
     async def get(self, task_id: str) -> TaskDoc | None: ...
-    async def update_fields(self, task_id: str, patch: Mapping[str, Any]) -> TaskDoc:
-        """
-        Apply a shallow patch to the document (atomic where supported).
-        Return the updated document.
-        """
-        ...
-
+    async def update_fields(self, task_id: str, patch: Mapping[str, Any]) -> TaskDoc: ...
     async def delete(self, task_id: str) -> None: ...
 
-    # ---- Vars (coordinator-managed) ----
+    # ---- Task scanning / liveness ----
 
-    async def update_vars(self, task_id: str, ops: list[Mapping[str, Any]]) -> Mapping[str, Any]:
+    async def iter_active(self) -> AsyncIterator[TaskDoc]:
         """
-        Apply a list of var operations (set/merge/incr) atomically and return the resulting vars map.
-
-        Each operation:
-            {"op":"set","key":"k","value":...} |
-            {"op":"merge","key":"k","value":{...}} |
-            {"op":"incr","key":"k","by":1}
-
-        The store MAY validate types minimally; the coordinator should pre-validate.
+        Yield tasks in non-terminal states (i.e., not 'finished' and not 'failed').
+        Ordering is backend-defined but SHOULD be stable (e.g., by _id asc).
         """
         ...
 
-    # ---- State / progress ----
+    async def touch_event(self, task_id: str) -> None:
+        """
+        Update task's 'last_event_ms' to current time. Called on every worker event
+        so the heartbeat monitor can detect liveness issues.
+        """
+        ...
 
-    async def set_state(self, task_id: str, state: RunState, *, reason: str | None = None) -> None: ...
-    async def update_progress(self, task_id: str, progress: Mapping[str, Any]) -> None: ...
+    async def ms_since_last_event(self, task_id: str) -> int:
+        """
+        Return milliseconds elapsed since the last event was observed for the task.
+        If unknown, return a large value to trigger soft/hard timeouts.
+        """
+        ...
 
-    # ---- Leasing ----
+    # ---- High-level task transitions ----
 
-    async def acquire_lease(self, task_id: str, *, worker_id: str, ttl_ms: int) -> LeaseInfo | None: ...
-    async def renew_lease(self, task_id: str, *, worker_id: str, lease_id: str, ttl_ms: int) -> LeaseInfo | None: ...
-    async def release_lease(self, task_id: str, *, worker_id: str, lease_id: str) -> bool: ...
+    async def bump_running(self, task_id: str) -> None:
+        """
+        Idempotently set task.status='running' if it is currently 'queued'.
+        No-op for other states.
+        """
+        ...
 
-    # ---- Query helpers (optional) ----
+    async def is_task_complete(self, task_id: str) -> bool:
+        """
+        Return True if there are no nodes in non-terminal states.
+        """
+        ...
 
-    async def find(
+    async def finish_task(self, task_id: str) -> None: ...
+    async def fail_task(self, task_id: str, *, reason: str) -> None: ...
+    async def defer_task(self, task_id: str, *, reason: str) -> None: ...
+
+    # ---- Node listing / lookup ----
+
+    async def iter_task_nodes(self, task_id: str) -> AsyncIterator[NodeSnapshot]: ...
+    async def get_node(self, task_id: str, node_id: str) -> NodeSnapshot | None: ...
+
+    # ---- Node lifecycle ----
+
+    async def begin_node(self, task_id: str, node_id: str) -> tuple[bool, int, LeaseInfo | None]:
+        """
+        Attempt to transition a node to 'running'.
+        Returns (begin_ok, new_epoch, lease_info_or_none).
+        Implementations MUST ensure this is atomic and single-writer (CAS).
+        """
+        ...
+
+    async def finish_node(self, task_id: str, node_id: str) -> None: ...
+    async def defer_node(self, task_id: str, node_id: str, *, reason: str) -> None: ...
+    async def fail_node(self, task_id: str, node_id: str, *, reason: str) -> None: ...
+    async def mark_cancelling(self, task_id: str, node_id: str, *, reason: str) -> None: ...
+
+    async def update_lease(
         self,
         *,
-        state: RunState | None = None,
-        owner: str | None = None,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> tuple[list[TaskDoc], str | None]:
+        task_id: str,
+        node_id: str,
+        worker_id: str,
+        lease_id: str,
+        deadline_ts_ms: int,
+    ) -> None:
         """
-        Optional: list tasks by simple filters with paging.
-        Return (items, next_cursor).
+        Update current worker lease on the node. Backends SHOULD set the embedded
+        'lease' object and MAY also update a simple 'lease_deadline_ms' field.
         """
         ...

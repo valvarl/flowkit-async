@@ -107,8 +107,7 @@ class Planner:
 
         # optional human approval (coordinator can implement separate workflow)
         need_approval = False
-        # spec provides approval config only in GraphSpec; compiler currently passes through in node policies
-        # for now signal "need_approval=False" (hook in your coordinator if you wire ApprovalSpec in plan)
+        # spec provides approval config at graph level; we only surface a boolean here
         return StartDecision(True, need_approval)
 
     # ---- dynamic edges
